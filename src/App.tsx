@@ -80,9 +80,10 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', h);
   }, []);
 
-  // Passive income
+  // Passive income - works everywhere EXCEPT unbox, clean, minigame
   useEffect(() => {
-    if (phase === 'menu') {
+    const activePhases: GamePhase[] = ['unbox', 'clean', 'minigame'];
+    if (!activePhases.includes(phase)) {
       const interval = setInterval(() => {
         const income = getPassiveIncome(gs.reputation);
         setGs(prev => ({ ...prev, coins: prev.coins + income, totalEarned: prev.totalEarned + income }));
@@ -505,52 +506,76 @@ function UnboxScreen({ box, t, lang, onOpen }: { box: BoxDef; t: Translations; l
       ) : (
         <>
           <p className="text-amber-700 text-sm">{t.openAllFlaps}</p>
-          <div className="relative w-56 h-56">
+          <div className="relative w-56 h-56" style={{ perspective: '600px' }}>
             {/* Box base */}
             <div className="absolute inset-0 flex items-center justify-center">
               <span className="text-8xl">{box.emoji}</span>
             </div>
 
-            {/* Flaps */}
-            {/* Top flap */}
-            <motion.button
-              className="absolute top-0 left-1/2 -translate-x-1/2 w-20 h-12 bg-amber-700 rounded-t-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
-              animate={flaps[0] ? { rotateX: -120, y: -30 } : {}}
+            {/* Flaps with proper transform-origin */}
+            {/* Top flap - hinges at top edge */}
+            <div
+              className="absolute top-0 left-1/2 w-24 h-14 cursor-pointer"
+              style={{
+                transformOrigin: 'center top',
+                transform: flaps[0] ? 'rotateX(-130deg)' : 'rotateX(0deg)',
+                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                marginLeft: '-48px',
+              }}
               onClick={() => handleFlapSwipe(0, 'up')}
-              whileTap={{ scale: 0.95 }}
             >
-              {flaps[0] ? '✓' : '↑'}
-            </motion.button>
+              <div className="w-full h-full bg-amber-700 rounded-t-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
+                {flaps[0] ? '✓' : '↑'}
+              </div>
+            </div>
 
-            {/* Right flap */}
-            <motion.button
-              className="absolute top-1/2 right-0 -translate-y-1/2 w-12 h-20 bg-amber-700 rounded-r-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
-              animate={flaps[1] ? { rotateY: 120, x: 30 } : {}}
+            {/* Right flap - hinges at right edge */}
+            <div
+              className="absolute top-1/2 right-0 w-14 h-24 cursor-pointer"
+              style={{
+                transformOrigin: 'right center',
+                transform: flaps[1] ? 'rotateY(130deg)' : 'rotateY(0deg)',
+                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                marginTop: '-48px',
+              }}
               onClick={() => handleFlapSwipe(1, 'right')}
-              whileTap={{ scale: 0.95 }}
             >
-              {flaps[1] ? '✓' : '→'}
-            </motion.button>
+              <div className="w-full h-full bg-amber-700 rounded-r-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
+                {flaps[1] ? '✓' : '→'}
+              </div>
+            </div>
 
-            {/* Bottom flap */}
-            <motion.button
-              className="absolute bottom-0 left-1/2 -translate-x-1/2 w-20 h-12 bg-amber-700 rounded-b-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
-              animate={flaps[2] ? { rotateX: 120, y: 30 } : {}}
+            {/* Bottom flap - hinges at bottom edge */}
+            <div
+              className="absolute bottom-0 left-1/2 w-24 h-14 cursor-pointer"
+              style={{
+                transformOrigin: 'center bottom',
+                transform: flaps[2] ? 'rotateX(130deg)' : 'rotateX(0deg)',
+                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                marginLeft: '-48px',
+              }}
               onClick={() => handleFlapSwipe(2, 'down')}
-              whileTap={{ scale: 0.95 }}
             >
-              {flaps[2] ? '✓' : '↓'}
-            </motion.button>
+              <div className="w-full h-full bg-amber-700 rounded-b-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
+                {flaps[2] ? '✓' : '↓'}
+              </div>
+            </div>
 
-            {/* Left flap */}
-            <motion.button
-              className="absolute top-1/2 left-0 -translate-y-1/2 w-12 h-20 bg-amber-700 rounded-l-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
-              animate={flaps[3] ? { rotateY: -120, x: -30 } : {}}
+            {/* Left flap - hinges at left edge */}
+            <div
+              className="absolute top-1/2 left-0 w-14 h-24 cursor-pointer"
+              style={{
+                transformOrigin: 'left center',
+                transform: flaps[3] ? 'rotateY(-130deg)' : 'rotateY(0deg)',
+                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                marginTop: '-48px',
+              }}
               onClick={() => handleFlapSwipe(3, 'left')}
-              whileTap={{ scale: 0.95 }}
             >
-              {flaps[3] ? '✓' : '←'}
-            </motion.button>
+              <div className="w-full h-full bg-amber-700 rounded-l-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
+                {flaps[3] ? '✓' : '←'}
+              </div>
+            </div>
           </div>
 
           {allFlapsOpen && (
@@ -566,22 +591,41 @@ function UnboxScreen({ box, t, lang, onOpen }: { box: BoxDef; t: Translations; l
 function CleanScreen({ item, t, lang, onComplete }: { item: Item; t: Translations; lang: Lang; onComplete: () => void }) {
   const [cleanPercent, setCleanPercent] = useState(0);
   const [completed, setCompleted] = useState(false);
+  const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleClean = (percent: number) => {
     setCleanPercent(percent);
   };
 
-  const handleComplete = () => {
+  const handleComplete = useCallback(() => {
     if (!completed) {
       setCompleted(true);
       playDingSound();
-      setTimeout(onComplete, 1000);
+      // Auto-transition after 1 second
+      if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+      autoTimerRef.current = setTimeout(() => {
+        onComplete();
+      }, 1000);
+    }
+  }, [completed, onComplete]);
+
+  // Fallback: if player cleaned 80%+ but algorithm didn't trigger, allow manual finish
+  const handleManualComplete = () => {
+    if (cleanPercent >= 80 && !completed) {
+      handleComplete();
     }
   };
 
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+    };
+  }, []);
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="flex flex-col items-center justify-center gap-4 p-6 w-full h-full">
+      className="flex flex-col items-center justify-center gap-3 p-4 w-full h-full">
       <h2 className="text-xl font-bold text-amber-900">{t.found}</h2>
 
       <div className="w-full max-w-xs">
@@ -589,21 +633,17 @@ function CleanScreen({ item, t, lang, onComplete }: { item: Item; t: Translation
           <span>{t.dirtLayer}</span>
           <span>{Math.round(cleanPercent)}%</span>
         </div>
-        <div className="bg-gray-300 rounded-full h-3 overflow-hidden">
-          <div className="h-full bg-gradient-to-r from-green-400 to-emerald-500 rounded-full transition-all" style={{ width: `${cleanPercent}%` }} />
+        <div className="bg-gray-300 rounded-full h-4 overflow-hidden">
+          <motion.div
+            className="h-full bg-gradient-to-r from-green-400 to-emerald-500 rounded-full"
+            animate={{ width: `${cleanPercent}%` }}
+            transition={{ duration: 0.2 }}
+          />
         </div>
       </div>
 
       <div className="relative">
-        <DirtCanvas emoji={item.emoji} size={220} onClean={handleClean} onComplete={handleComplete} />
-
-        {/* Sparkles when complete */}
-        {completed && (
-          <motion.div initial={{ opacity: 0, scale: 0 }} animate={{ opacity: 1, scale: 1 }}
-            className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="text-6xl">✨</div>
-          </motion.div>
-        )}
+        <DirtCanvas emoji={item.emoji} size={200} onClean={handleClean} onComplete={handleComplete} />
       </div>
 
       {cleanPercent > 50 && (
@@ -615,6 +655,23 @@ function CleanScreen({ item, t, lang, onComplete }: { item: Item; t: Translation
       )}
 
       <p className="text-amber-700 text-sm">{t.swipeToClean}</p>
+
+      {/* Fallback button - appears at 80%+ */}
+      {cleanPercent >= 80 && !completed && (
+        <motion.button
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          onClick={handleManualComplete}
+          className="px-6 py-2 bg-green-500 text-white rounded-xl font-bold text-sm shadow-lg animate-pulse"
+        >
+          ✓ {lang === 'ru' ? 'Завершить' : 'Finish'}
+        </motion.button>
+      )}
+
+      {/* Completed state */}
+      {completed && (
+        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="text-4xl">✨</motion.div>
+      )}
     </motion.div>
   );
 }
@@ -790,7 +847,9 @@ function MinigameScreen({ t, lang, onComplete }: { t: Translations; lang: Lang; 
   const [timeLeft, setTimeLeft] = useState(30);
   const [score, setScore] = useState(0);
   const [items, setItems] = useState<ConveyorItem[]>([]);
+  const [slowdown, setSlowdown] = useState(false);
   const itemIdRef = useRef(0);
+  const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const trashEmojis = ['🍎', '👟', '🗑️', '🧦', '📰'];
   const valuableEmojis = ['⌚', '🏺', '💎', '🖼️', '📿'];
@@ -835,14 +894,15 @@ function MinigameScreen({ t, lang, onComplete }: { t: Translations; lang: Lang; 
     if (!started || timeLeft <= 0) return;
 
     const mover = setInterval(() => {
+      const speed = slowdown ? 0.8 : 2; // Slower when slowdown active
       setItems(prev => prev
-        .map(item => ({ ...item, x: item.x - 2 }))
+        .map(item => ({ ...item, x: item.x - speed }))
         .filter(item => item.x > -20)
       );
     }, 50);
 
     return () => clearInterval(mover);
-  }, [started, timeLeft]);
+  }, [started, timeLeft, slowdown]);
 
   const tapItem = (id: number, isTrash: boolean) => {
     setItems(prev => prev.map(item => item.id === id ? { ...item, tapped: true } : item));
@@ -853,6 +913,12 @@ function MinigameScreen({ t, lang, onComplete }: { t: Translations; lang: Lang; 
       setScore(prev => prev - 2);
       playTapSound();
     }
+
+    // Slowdown conveyor for 0.2s
+    setSlowdown(true);
+    if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
+    slowTimerRef.current = setTimeout(() => setSlowdown(false), 200);
+
     setTimeout(() => {
       setItems(prev => prev.filter(item => item.id !== id));
     }, 200);
@@ -907,16 +973,22 @@ function MinigameScreen({ t, lang, onComplete }: { t: Translations; lang: Lang; 
           ))}
         </div>
 
-        {/* Items */}
+        {/* Items with enlarged hitbox */}
         {items.filter(item => !item.tapped).map(item => (
           <motion.button
             key={item.id}
-            className="absolute text-4xl"
-            style={{ left: `${item.x}%`, top: '50%', transform: 'translateY(-50%)' }}
+            className="absolute flex items-center justify-center"
+            style={{
+              left: `${item.x}%`,
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '80px',  // Much larger than emoji
+              height: '80px', // Much larger than emoji
+            }}
             onClick={() => tapItem(item.id, item.isTrash)}
-            whileTap={{ scale: 0.8 }}
+            whileTap={{ scale: 0.9 }}
           >
-            {item.emoji}
+            <span className="text-4xl pointer-events-none">{item.emoji}</span>
           </motion.button>
         ))}
       </div>
