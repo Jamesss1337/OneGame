@@ -1,8 +1,9 @@
 // ============ TYPES ============
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
-export type GamePhase = 'menu' | 'shop' | 'unbox' | 'clean' | 'sell' | 'upgrades' | 'tutorial' | 'info';
+export type GamePhase = 'menu' | 'shop' | 'unbox' | 'clean' | 'sell' | 'upgrades' | 'tutorial' | 'info' | 'minigame';
 export type BoxType = 'cardboard' | 'wooden' | 'safe' | 'pirate_chest';
 export type ToolType = 'rag' | 'brush' | 'polisher';
+export type NPCType = 'junkman' | 'collector' | 'passerby' | 'aristocrat';
 
 export interface Item {
   id: string;
@@ -20,14 +21,29 @@ export interface BoxDef {
   emoji: string;
   rarityWeights: Record<Rarity, number>;
   possibleItems: string[];
+  requiredRep: number;
 }
 
 export interface ToolDef {
   id: ToolType;
   name: { ru: string; en: string };
   emoji: string;
-  cleanPower: number; // 1-3
+  cleanPower: number;
   price: number;
+}
+
+export interface NPCDef {
+  id: NPCType;
+  name: { ru: string; en: string };
+  emoji: string;
+  priceMultiplier: number;
+  repChange: number;
+  requiredRep: number;
+  moods: {
+    low: { ru: string; en: string };
+    mid: { ru: string; en: string };
+    high: { ru: string; en: string };
+  };
 }
 
 export interface UpgradeDef {
@@ -48,18 +64,21 @@ export const L = {
     upgradesBtn: 'Улучшения',
     tutorial: 'Как играть',
     info: 'Правила',
+    minigame: 'Подработка',
     settings: 'Настройки',
     coins: 'Монеты',
     buy: 'Купить',
     clean: 'Очистить',
     sell: 'Продать',
+    scrap: 'В утиль',
     next: 'Далее',
     back: 'Назад',
-    close: 'Закрыть',
+    close: 'Закрырь',
     x2reward: 'x2 Монеты!',
     newBox: 'Новая коробка!',
     found: 'Найдено!',
     sold: 'Продано!',
+    reputation: 'Репутация',
     rarity: {
       common: 'Обычный',
       uncommon: 'Необычный',
@@ -69,14 +88,14 @@ export const L = {
     },
     tutorial1: 'Покупай загадочные коробки на барахолке',
     tutorial2: 'Очищай предметы от грязи и ржавчины',
-    tutorial3: 'Продавай находки покупателям!',
+    tutorial3: 'Торгуйся с покупателями и продавай находки!',
     step: 'Шаг',
     of: 'из',
     boxTypes: {
       cardboard: 'Картонная коробка',
       wooden: 'Деревянный ящик',
       safe: 'Старый сейф',
-      pirate_chest: 'Сундук пирата',
+      pirate_chest: 'Проклятый сундук',
     },
     toolNames: {
       rag: 'Тряпка',
@@ -84,9 +103,9 @@ export const L = {
       polisher: 'Полировальная машина',
     },
     upgrades: {
-      display: { name: 'Витрина', desc: 'Покупатели платят больше' },
-      helper: { name: 'Помощник', desc: 'Бесплатная коробка каждые 5 продаж' },
-      reputation: { name: 'Репутация', desc: 'Больше редких предметов' },
+      display: { name: 'Витрина', desc: 'Покупатели платят +20% за уровень' },
+      helper: { name: 'Помощник', desc: 'Бесплатная коробка каждые N продаж' },
+      reputation: { name: 'Репутация', desc: '+10% шанс редких предметов' },
       speed: { name: 'Мастерство', desc: 'Быстрее очистка' },
     },
     buyerThoughts: {
@@ -108,6 +127,33 @@ export const L = {
     totalEarned: 'Всего заработано',
     itemsFound: 'Предметов найдено',
     boxesOpened: 'Коробок открыто',
+    tape: 'Скотч',
+    flap: 'Клапан',
+    openAllFlaps: 'Отогни все 4 клапана!',
+    tearTape: 'Порви скотч!',
+    npcTypes: {
+      junkman: 'Барахольщик',
+      collector: 'Коллекционер',
+      passerby: 'Прохожий',
+      aristocrat: 'Аристократ',
+    },
+    lowPrice: 'Низкая',
+    midPrice: 'Средняя',
+    highPrice: 'Высокая',
+    tooExpensive: 'Слишком дорого!',
+    deal: 'Сделка!',
+    soldFor: 'Продано за',
+    repGain: '+{n} реп',
+    repLoss: '{n} реп',
+    minigameTitle: 'Сортировка',
+    minigameDesc: 'Тапай только на мусор!',
+    minigameStart: 'Начать',
+    minigameEnd: 'Время вышло!',
+    minigameScore: 'Заработано',
+    passiveIncome: 'Пассивный доход',
+    scrapValue: 'Сдать за 5🪙',
+    repRequired: 'Нужно {n} реп',
+    unlocked: 'Открыто!',
   },
   en: {
     title: 'Flea Market',
@@ -116,11 +162,13 @@ export const L = {
     upgradesBtn: 'Upgrades',
     tutorial: 'How to Play',
     info: 'Rules',
+    minigame: 'Side Job',
     settings: 'Settings',
     coins: 'Coins',
     buy: 'Buy',
     clean: 'Clean',
     sell: 'Sell',
+    scrap: 'Scrap',
     next: 'Next',
     back: 'Back',
     close: 'Close',
@@ -128,6 +176,7 @@ export const L = {
     newBox: 'New Box!',
     found: 'Found!',
     sold: 'Sold!',
+    reputation: 'Reputation',
     rarity: {
       common: 'Common',
       uncommon: 'Uncommon',
@@ -137,14 +186,14 @@ export const L = {
     },
     tutorial1: 'Buy mysterious boxes at the flea market',
     tutorial2: 'Clean items from dirt and rust',
-    tutorial3: 'Sell your finds to buyers!',
+    tutorial3: 'Bargain with buyers and sell your finds!',
     step: 'Step',
     of: 'of',
     boxTypes: {
       cardboard: 'Cardboard Box',
       wooden: 'Wooden Crate',
       safe: 'Old Safe',
-      pirate_chest: 'Pirate Chest',
+      pirate_chest: 'Cursed Chest',
     },
     toolNames: {
       rag: 'Rag',
@@ -152,9 +201,9 @@ export const L = {
       polisher: 'Polishing Machine',
     },
     upgrades: {
-      display: { name: 'Display', desc: 'Buyers pay more' },
-      helper: { name: 'Helper', desc: 'Free box every 5 sales' },
-      reputation: { name: 'Reputation', desc: 'More rare items' },
+      display: { name: 'Display', desc: 'Buyers pay +20% per level' },
+      helper: { name: 'Helper', desc: 'Free box every N sales' },
+      reputation: { name: 'Reputation', desc: '+10% rare item chance' },
       speed: { name: 'Mastery', desc: 'Faster cleaning' },
     },
     buyerThoughts: {
@@ -176,37 +225,64 @@ export const L = {
     totalEarned: 'Total Earned',
     itemsFound: 'Items Found',
     boxesOpened: 'Boxes Opened',
+    tape: 'Tape',
+    flap: 'Flap',
+    openAllFlaps: 'Open all 4 flaps!',
+    tearTape: 'Tear the tape!',
+    npcTypes: {
+      junkman: 'Junkman',
+      collector: 'Collector',
+      passerby: 'Passerby',
+      aristocrat: 'Aristocrat',
+    },
+    lowPrice: 'Low',
+    midPrice: 'Medium',
+    highPrice: 'High',
+    tooExpensive: 'Too expensive!',
+    deal: 'Deal!',
+    soldFor: 'Sold for',
+    repGain: '+{n} rep',
+    repLoss: '{n} rep',
+    minigameTitle: 'Sorting',
+    minigameDesc: 'Tap only on trash!',
+    minigameStart: 'Start',
+    minigameEnd: 'Time is up!',
+    minigameScore: 'Earned',
+    passiveIncome: 'Passive Income',
+    scrapValue: 'Scrap for 5🪙',
+    repRequired: 'Need {n} rep',
+    unlocked: 'Unlocked!',
   },
 };
 
 // ============ ITEMS ============
 export const ITEMS: Item[] = [
   // Common
-  { id: 'rusty_nail', name: { ru: 'Ржавый гвоздь', en: 'Rusty Nail' }, rarity: 'common', basePrice: 5, category: 'metal', emoji: '🔩' },
-  { id: 'old_button', name: { ru: 'Старая пуговица', en: 'Old Button' }, rarity: 'common', basePrice: 8, category: 'fabric', emoji: '🔘' },
-  { id: 'broken_glass', name: { ru: 'Битое стекло', en: 'Broken Glass' }, rarity: 'common', basePrice: 3, category: 'glass', emoji: '💎' },
-  { id: 'old_key', name: { ru: 'Старый ключ', en: 'Old Key' }, rarity: 'common', basePrice: 12, category: 'metal', emoji: '🔑' },
-  { id: 'dusty_book', name: { ru: 'Пыльная книга', en: 'Dusty Book' }, rarity: 'common', basePrice: 15, category: 'paper', emoji: '📖' },
-  { id: 'tin_soldier', name: { ru: 'Оловянный солдатик', en: 'Tin Soldier' }, rarity: 'common', basePrice: 20, category: 'toy', emoji: '🪖' },
+  { id: 'rusty_nail', name: { ru: 'Ржавый гвоздь', en: 'Rusty Nail' }, rarity: 'common', basePrice: 25, category: 'metal', emoji: '🔩' },
+  { id: 'old_button', name: { ru: 'Старая пуговица', en: 'Old Button' }, rarity: 'common', basePrice: 30, category: 'fabric', emoji: '🔘' },
+  { id: 'broken_glass', name: { ru: 'Битое стекло', en: 'Broken Glass' }, rarity: 'common', basePrice: 22, category: 'glass', emoji: '💎' },
+  { id: 'old_key', name: { ru: 'Старый ключ', en: 'Old Key' }, rarity: 'common', basePrice: 35, category: 'metal', emoji: '🔑' },
+  { id: 'dusty_book', name: { ru: 'Пыльная книга', en: 'Dusty Book' }, rarity: 'common', basePrice: 40, category: 'paper', emoji: '📖' },
+  { id: 'tin_soldier', name: { ru: 'Оловянный солдатик', en: 'Tin Soldier' }, rarity: 'common', basePrice: 45, category: 'toy', emoji: '🪖' },
   // Uncommon
-  { id: 'silver_coin', name: { ru: 'Серебряная монета', en: 'Silver Coin' }, rarity: 'uncommon', basePrice: 50, category: 'metal', emoji: '🪙' },
-  { id: 'crystal_vial', name: { ru: 'Хрустальный флакон', en: 'Crystal Vial' }, rarity: 'uncommon', basePrice: 65, category: 'glass', emoji: '🧪' },
-  { id: 'silk_scarf', name: { ru: 'Шёлковый шарф', en: 'Silk Scarf' }, rarity: 'uncommon', basePrice: 80, category: 'fabric', emoji: '🧣' },
-  { id: 'brass_compass', name: { ru: 'Латунный компас', en: 'Brass Compass' }, rarity: 'uncommon', basePrice: 90, category: 'metal', emoji: '🧭' },
-  { id: 'old_watch', name: { ru: 'Старинные часы', en: 'Vintage Watch' }, rarity: 'uncommon', basePrice: 100, category: 'metal', emoji: '⌚' },
+  { id: 'silver_coin', name: { ru: 'Серебряная монета', en: 'Silver Coin' }, rarity: 'uncommon', basePrice: 120, category: 'metal', emoji: '🪙' },
+  { id: 'crystal_vial', name: { ru: 'Хрустальный флакон', en: 'Crystal Vial' }, rarity: 'uncommon', basePrice: 150, category: 'glass', emoji: '🧪' },
+  { id: 'silk_scarf', name: { ru: 'Шёлковый шарф', en: 'Silk Scarf' }, rarity: 'uncommon', basePrice: 180, category: 'fabric', emoji: '🧣' },
+  { id: 'brass_compass', name: { ru: 'Латунный компас', en: 'Brass Compass' }, rarity: 'uncommon', basePrice: 200, category: 'metal', emoji: '🧭' },
+  { id: 'old_watch', name: { ru: 'Старинные часы', en: 'Vintage Watch' }, rarity: 'uncommon', basePrice: 220, category: 'metal', emoji: '⌚' },
   // Rare
-  { id: 'gold_ring', name: { ru: 'Золотое кольцо', en: 'Gold Ring' }, rarity: 'rare', basePrice: 200, category: 'metal', emoji: '💍' },
-  { id: 'ancient_map', name: { ru: 'Древняя карта', en: 'Ancient Map' }, rarity: 'rare', basePrice: 250, category: 'paper', emoji: '🗺️' },
-  { id: 'jade_figurine', name: { ru: 'Нефритовая статуэтка', en: 'Jade Figurine' }, rarity: 'rare', basePrice: 300, category: 'stone', emoji: '🗿' },
-  { id: 'pearl_necklace', name: { ru: 'Жемчужное ожерелье', en: 'Pearl Necklace' }, rarity: 'rare', basePrice: 350, category: 'jewelry', emoji: '📿' },
+  { id: 'gold_ring', name: { ru: 'Золотое кольцо', en: 'Gold Ring' }, rarity: 'rare', basePrice: 500, category: 'metal', emoji: '💍' },
+  { id: 'ancient_map', name: { ru: 'Древняя карта', en: 'Ancient Map' }, rarity: 'rare', basePrice: 600, category: 'paper', emoji: '🗺️' },
+  { id: 'jade_figurine', name: { ru: 'Нефритовая статуэтка', en: 'Jade Figurine' }, rarity: 'rare', basePrice: 700, category: 'stone', emoji: '🗿' },
+  { id: 'pearl_necklace', name: { ru: 'Жемчужное ожерелье', en: 'Pearl Necklace' }, rarity: 'rare', basePrice: 800, category: 'jewelry', emoji: '📿' },
   // Epic
-  { id: 'roman_coin', name: { ru: 'Римская монета', en: 'Roman Coin' }, rarity: 'epic', basePrice: 800, category: 'metal', emoji: '🏛️' },
-  { id: 'faberge_egg', name: { ru: 'Яйцо Фаберже', en: 'Fabergé Egg' }, rarity: 'epic', basePrice: 1200, category: 'jewelry', emoji: '🥚' },
-  { id: 'viking_axe', name: { ru: 'Топор викинга', en: 'Viking Axe' }, rarity: 'epic', basePrice: 1500, category: 'metal', emoji: '🪓' },
+  { id: 'roman_coin', name: { ru: 'Римская монета', en: 'Roman Coin' }, rarity: 'epic', basePrice: 1800, category: 'metal', emoji: '🏛️' },
+  { id: 'faberge_egg', name: { ru: 'Яйцо Фаберже', en: 'Fabergé Egg' }, rarity: 'epic', basePrice: 2500, category: 'jewelry', emoji: '🥚' },
+  { id: 'viking_axe', name: { ru: 'Топор викинга', en: 'Viking Axe' }, rarity: 'epic', basePrice: 3000, category: 'metal', emoji: '🪓' },
   // Legendary
-  { id: 'pharaoh_crown', name: { ru: 'Корона фараона', en: "Pharaoh's Crown" }, rarity: 'legendary', basePrice: 5000, category: 'jewelry', emoji: '👑' },
-  { id: 'dragon_ruby', name: { ru: 'Рубин дракона', en: 'Dragon Ruby' }, rarity: 'legendary', basePrice: 8000, category: 'stone', emoji: '❤️‍🔥' },
-  { id: 'golden_idol', name: { ru: 'Золотой идол', en: 'Golden Idol' }, rarity: 'legendary', basePrice: 10000, category: 'metal', emoji: '🏆' },
+  { id: 'pharaoh_crown', name: { ru: 'Корона фараона', en: "Pharaoh's Crown" }, rarity: 'legendary', basePrice: 8000, category: 'jewelry', emoji: '👑' },
+  { id: 'dragon_ruby', name: { ru: 'Рубин дракона', en: 'Dragon Ruby' }, rarity: 'legendary', basePrice: 12000, category: 'stone', emoji: '❤️‍🔥' },
+  { id: 'golden_idol', name: { ru: 'Золотой идол', en: 'Golden Idol' }, rarity: 'legendary', basePrice: 15000, category: 'metal', emoji: '🏆' },
 ];
 
 // ============ BOXES ============
@@ -218,6 +294,7 @@ export const BOXES: BoxDef[] = [
     emoji: '📦',
     rarityWeights: { common: 60, uncommon: 30, rare: 8, epic: 2, legendary: 0 },
     possibleItems: ['rusty_nail', 'old_button', 'broken_glass', 'old_key', 'dusty_book', 'silver_coin', 'old_watch'],
+    requiredRep: 0,
   },
   {
     id: 'wooden',
@@ -226,6 +303,7 @@ export const BOXES: BoxDef[] = [
     emoji: '🪵',
     rarityWeights: { common: 30, uncommon: 45, rare: 20, epic: 5, legendary: 0 },
     possibleItems: ['old_key', 'dusty_book', 'tin_soldier', 'silver_coin', 'crystal_vial', 'silk_scarf', 'brass_compass', 'old_watch', 'gold_ring', 'ancient_map'],
+    requiredRep: 50,
   },
   {
     id: 'safe',
@@ -234,14 +312,16 @@ export const BOXES: BoxDef[] = [
     emoji: '🔐',
     rarityWeights: { common: 10, uncommon: 30, rare: 40, epic: 18, legendary: 2 },
     possibleItems: ['brass_compass', 'old_watch', 'gold_ring', 'ancient_map', 'jade_figurine', 'pearl_necklace', 'roman_coin', 'faberge_egg'],
+    requiredRep: 150,
   },
   {
     id: 'pirate_chest',
-    name: { ru: 'Сундук пирата', en: 'Pirate Chest' },
+    name: { ru: 'Проклятый сундук', en: 'Cursed Chest' },
     price: 800,
     emoji: '🏴‍☠️',
-    rarityWeights: { common: 0, uncommon: 15, rare: 40, epic: 35, legendary: 10 },
+    rarityWeights: { common: 0, uncommon: 15, rare: 35, epic: 35, legendary: 15 },
     possibleItems: ['jade_figurine', 'pearl_necklace', 'roman_coin', 'faberge_egg', 'viking_axe', 'pharaoh_crown', 'dragon_ruby', 'golden_idol'],
+    requiredRep: 300,
   },
 ];
 
@@ -250,6 +330,62 @@ export const TOOLS: ToolDef[] = [
   { id: 'rag', name: { ru: 'Тряпка', en: 'Rag' }, emoji: '🧹', cleanPower: 1, price: 0 },
   { id: 'brush', name: { ru: 'Щётка', en: 'Brush' }, emoji: '🪥', cleanPower: 2, price: 200 },
   { id: 'polisher', name: { ru: 'Полировальная машина', en: 'Polishing Machine' }, emoji: '⚙️', cleanPower: 3, price: 800 },
+];
+
+// ============ NPCs ============
+export const NPCS: NPCDef[] = [
+  {
+    id: 'junkman',
+    name: { ru: 'Барахольщик', en: 'Junkman' },
+    emoji: '🧔',
+    priceMultiplier: 0.8,
+    repChange: 10,
+    requiredRep: 0,
+    moods: {
+      low: { ru: 'Денег мало, но гляну...', en: 'Low on cash, but I will look...' },
+      mid: { ru: 'Ну, может возьму', en: 'Well, maybe I will take it' },
+      high: { ru: 'О, неплохо!', en: 'Oh, not bad!' },
+    },
+  },
+  {
+    id: 'collector',
+    name: { ru: 'Коллекционер', en: 'Collector' },
+    emoji: '🎩',
+    priceMultiplier: 1.5,
+    repChange: -5,
+    requiredRep: 0,
+    moods: {
+      low: { ru: 'Бюджет ограничен', en: 'Budget is tight' },
+      mid: { ru: 'Интересно...', en: 'Interesting...' },
+      high: { ru: 'Получил премию!', en: 'Got a bonus!' },
+    },
+  },
+  {
+    id: 'passerby',
+    name: { ru: 'Прохожий', en: 'Passerby' },
+    emoji: '🚶',
+    priceMultiplier: 1.0,
+    repChange: 0,
+    requiredRep: 0,
+    moods: {
+      low: { ru: 'Просто смотрю', en: 'Just looking' },
+      mid: { ru: 'Неплохо', en: 'Not bad' },
+      high: { ru: 'Отлично!', en: 'Great!' },
+    },
+  },
+  {
+    id: 'aristocrat',
+    name: { ru: 'Аристократ', en: 'Aristocrat' },
+    emoji: '🤵',
+    priceMultiplier: 3.0,
+    repChange: 5,
+    requiredRep: 100,
+    moods: {
+      low: { ru: 'Хм, сомнительно', en: 'Hmm, doubtful' },
+      mid: { ru: 'Приемлемо', en: 'Acceptable' },
+      high: { ru: 'Превосходно!', en: 'Excellent!' },
+    },
+  },
 ];
 
 // ============ UPGRADES ============
@@ -296,7 +432,6 @@ export function getBoxById(id: BoxType): BoxDef | undefined {
 
 export function rollItemFromBox(box: BoxDef, reputationLevel: number): Item {
   const weights = { ...box.rarityWeights };
-  // Reputation bonus: shift weights towards rarer items
   if (reputationLevel > 0) {
     const bonus = reputationLevel * 5;
     weights.common = Math.max(0, weights.common - bonus);
@@ -323,7 +458,6 @@ export function rollItemFromBox(box: BoxDef, reputationLevel: number): Item {
     .filter((item): item is Item => item !== undefined && item.rarity === selectedRarity);
 
   if (possibleItems.length === 0) {
-    // Fallback: pick any item from box
     const fallback = box.possibleItems
       .map(id => getItemById(id))
       .filter((item): item is Item => item !== undefined);
@@ -335,4 +469,21 @@ export function rollItemFromBox(box: BoxDef, reputationLevel: number): Item {
 
 export function getUpgradePrice(basePrice: number, level: number): number {
   return Math.floor(basePrice * Math.pow(1.5, level));
+}
+
+export function getAvailableNPCs(reputation: number): NPCDef[] {
+  return NPCS.filter(npc => reputation >= npc.requiredRep);
+}
+
+export function rollNPC(reputation: number): NPCDef {
+  const available = getAvailableNPCs(reputation);
+  return available[Math.floor(Math.random() * available.length)];
+}
+
+export function getPassiveIncome(reputation: number): number {
+  return 1 + Math.floor(reputation / 50);
+}
+
+export function getPriceBonusFromRep(reputation: number): number {
+  return 1 + (reputation / 50) * 0.01;
 }
