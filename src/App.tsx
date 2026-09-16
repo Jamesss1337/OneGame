@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  GamePhase, Item, BoxDef, Rarity,
-  L, BOXES, TOOLS, UPGRADES,
+  GamePhase, Item, BoxDef, NPCDef, Rarity,
+  L, BOXES, TOOLS, UPGRADES, NPCS,
   RARITY_COLORS, RARITY_BG, RARITY_GLOW,
-  rollItemFromBox, getUpgradePrice,
+  rollItemFromBox, getUpgradePrice, rollNPC, getPassiveIncome, getPriceBonusFromRep,
 } from './gameData';
 import {
   playBrushSound, playDingSound, playCoinSound,
@@ -12,6 +12,7 @@ import {
   playClickSound, playPolishSound,
   setSoundEnabled,
 } from './sounds';
+import DirtCanvas from './DirtCanvas';
 
 type Lang = 'ru' | 'en';
 type Translations = typeof L.ru;
@@ -23,6 +24,7 @@ interface GameState {
   itemsFound: number;
   boxesOpened: number;
   salesCount: number;
+  reputation: number;
   currentTool: number;
   upgradeLevels: Record<string, number>;
   lang: Lang;
@@ -31,10 +33,11 @@ interface GameState {
 
 const DEFAULT_STATE: GameState = {
   coins: 100,
-  totalEarned: 0,
+  totalEarned:0,
   itemsFound: 0,
   boxesOpened: 0,
   salesCount: 0,
+  reputation: 0,
   currentTool: 0,
   upgradeLevels: { display: 0, helper: 0, reputation: 0, speed: 0 },
   lang: 'ru',
@@ -55,15 +58,13 @@ function saveState(state: GameState) {
 
 // ============ MAIN APP ============
 export default function App() {
-  const [gs, setGs] = useState<GameState>(loadState);
+  const [gs, setGs] = useState<GameState>(loadState());
   const [phase, setPhase] = useState<GamePhase>('menu');
   const [currentBox, setCurrentBox] = useState<BoxDef | null>(null);
   const [currentItem, setCurrentItem] = useState<Item | null>(null);
-  const [dirtLevel, setDirtLevel] = useState(100);
-  const [boxOpenProgress, setBoxOpenProgress] = useState(0);
-  const [sellMultiplier, setSellMultiplier] = useState(1);
+  const [currentNPC, setCurrentNPC] = useState<NPCDef | null>(null);
+  const [npcMood, setNpcMood] = useState<'low' | 'mid' | 'high'>('mid');
   const [showReward, setShowReward] = useState(false);
-  const [buyerReaction, setBuyerReaction] = useState<'want' | 'maybe' | 'no'>('want');
   const [notification, setNotification] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
 
@@ -79,6 +80,17 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', h);
   }, []);
 
+  // Passive income
+  useEffect(() => {
+    if (phase === 'menu') {
+      const interval = setInterval(() => {
+        const income = getPassiveIncome(gs.reputation);
+        setGs(prev => ({ ...prev, coins: prev.coins + income, totalEarned: prev.totalEarned + income }));
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [phase, gs.reputation]);
+
   const showNotif = useCallback((msg: string) => {
     setNotification(msg);
     setTimeout(() => setNotification(null), 2000);
@@ -89,71 +101,101 @@ export default function App() {
   }, []);
 
   const buyBox = useCallback((box: BoxDef) => {
+    if (gs.reputation < box.requiredRep) {
+      showNotif(t.repRequired.replace('{n}', box.requiredRep.toString()));
+      playTapSound();
+      return;
+    }
     if (gs.coins < box.price) { showNotif(t.noMoney); playTapSound(); return; }
     playClickSound();
     upd({ coins: gs.coins - box.price });
     setCurrentBox(box);
-    setDirtLevel(100);
-    setBoxOpenProgress(0);
     setPhase('unbox');
-  }, [gs.coins, upd, showNotif, t.noMoney]);
+  }, [gs.coins, gs.reputation, upd, showNotif, t.noMoney, t.repRequired]);
 
   const openBox = useCallback(() => {
     if (!currentBox) return;
     playBoxOpenSound();
     const item = rollItemFromBox(currentBox, gs.upgradeLevels.reputation);
     setCurrentItem(item);
-    setDirtLevel(100);
-    upd({ boxesOpened: gs.boxesOpened + 1 });
+    upd({ boxesOpened: gs.boxesOpened + 1, itemsFound: gs.itemsFound + 1 });
     setPhase('clean');
-  }, [currentBox, gs.upgradeLevels.reputation, gs.boxesOpened, upd]);
+  }, [currentBox, gs.upgradeLevels.reputation, gs.boxesOpened, gs.itemsFound, upd]);
 
-  const cleanItem = useCallback((amount: number) => {
-    const toolPower = TOOLS[gs.currentTool].cleanPower;
-    const speedBonus = 1 + gs.upgradeLevels.speed * 0.15;
-    const newDirt = Math.max(0, dirtLevel - amount * toolPower * speedBonus);
-    setDirtLevel(newDirt);
-    if (newDirt <= 0) {
-      playSuccessSound();
-      upd({ itemsFound: gs.itemsFound + 1 });
-      const r = Math.random();
-      setBuyerReaction(r < 0.7 ? 'want' : r < 0.9 ? 'maybe' : 'no');
-      setPhase('sell');
-    }
-  }, [gs.currentTool, gs.upgradeLevels.speed, dirtLevel, gs.itemsFound, upd]);
+  const cleanComplete = useCallback(() => {
+    playSuccessSound();
+    const npc = rollNPC(gs.reputation);
+    setCurrentNPC(npc);
+    const moodRoll = Math.random();
+    setNpcMood(moodRoll < 0.33 ? 'low' : moodRoll < 0.66 ? 'mid' : 'high');
+    setPhase('sell');
+  }, [gs.reputation]);
 
-  const getPrice = useCallback(() => {
-    if (!currentItem) return 0;
+  const sellToNPC = useCallback((priceLevel: 'low' | 'mid' | 'high') => {
+    if (!currentItem || !currentNPC) return;
+    const basePrice = currentItem.basePrice * getPriceBonusFromRep(gs.reputation);
     const displayBonus = 1 + gs.upgradeLevels.display * 0.2;
-    const reactionMult = buyerReaction === 'want' ? 1.2 : buyerReaction === 'maybe' ? 1.0 : 0.7;
-    return Math.floor(currentItem.basePrice * displayBonus * reactionMult * sellMultiplier);
-  }, [currentItem, gs.upgradeLevels.display, buyerReaction, sellMultiplier]);
+    const price = basePrice * displayBonus;
 
-  const sellItem = useCallback(() => {
-    if (!currentItem) return;
-    const price = getPrice();
+    let multiplier = 1.0;
+    if (priceLevel === 'low') multiplier = 1.0;
+    else if (priceLevel === 'mid') multiplier = 1.3;
+    else multiplier = 1.6;
+
+    const offerPrice = Math.floor(price * multiplier);
+    const npcMaxMultiplier = npcMood === 'low' ? 1.0 : npcMood === 'mid' ? 1.4 : 1.8;
+    const npcMax = Math.floor(price * npcMaxMultiplier);
+
+    if (offerPrice > npcMax) {
+      // Too expensive
+      playTapSound();
+      showNotif(t.tooExpensive);
+      // Try next NPC
+      const newNpc = rollNPC(gs.reputation);
+      setCurrentNPC(newNpc);
+      const moodRoll = Math.random();
+      setNpcMood(moodRoll < 0.33 ? 'low' : moodRoll < 0.66 ? 'mid' : 'high');
+      return;
+    }
+
+    // Deal!
     playCoinSound();
-    const newSales = gs.salesCount + 1;
-    upd({ coins: gs.coins + price, totalEarned: gs.totalEarned + price, salesCount: newSales });
+    const finalPrice = Math.floor(offerPrice * currentNPC.priceMultiplier);
+    const repChange = currentNPC.repChange;
+    upd({
+      coins: gs.coins + finalPrice,
+      totalEarned: gs.totalEarned + finalPrice,
+      reputation: Math.max(0, gs.reputation + repChange),
+      salesCount: gs.salesCount + 1,
+    });
     setShowReward(true);
-    setSellMultiplier(1);
 
+    // Check for free box from helper
     const helperLevel = gs.upgradeLevels.helper;
     if (helperLevel > 0) {
       const interval = Math.max(2, 6 - helperLevel);
-      if (newSales % interval === 0) {
-        setTimeout(() => { showNotif(t.freeBox); upd({ coins: gs.coins + price + BOXES[0].price }); }, 1500);
+      if ((gs.salesCount + 1) % interval === 0) {
+        setTimeout(() => { showNotif(t.freeBox); upd({ coins: gs.coins + finalPrice + BOXES[0].price }); }, 1500);
       }
     }
-  }, [currentItem, getPrice, gs, upd, showNotif, t.freeBox]);
+  }, [currentItem, currentNPC, gs, npcMood, upd, showNotif, t.tooExpensive, t.freeBox]);
+
+  const scrapItem = useCallback(() => {
+    upd({ coins: gs.coins + 5, totalEarned: gs.totalEarned + 5 });
+    playCoinSound();
+    setPhase('shop');
+  }, [gs.coins, gs.totalEarned, upd]);
 
   const doubleReward = useCallback(() => {
-    const bonus = getPrice();
+    if (!currentItem || !currentNPC) return;
+    const basePrice = currentItem.basePrice * getPriceBonusFromRep(gs.reputation);
+    const displayBonus = 1 + gs.upgradeLevels.display * 0.2;
+    const bonus = Math.floor(basePrice * displayBonus * currentNPC.priceMultiplier);
     upd({ coins: gs.coins + bonus, totalEarned: gs.totalEarned + bonus });
     playCoinSound();
     setShowReward(false);
     setPhase('shop');
-  }, [getPrice, gs.coins, gs.totalEarned, upd]);
+  }, [currentItem, currentNPC, gs, upd]);
 
   const buyUpgrade = useCallback((id: string) => {
     const upg = UPGRADES.find(u => u.id === id);
@@ -172,6 +214,12 @@ export default function App() {
     playCoinSound();
     upd({ coins: gs.coins - tool.price, currentTool: idx });
   }, [gs.coins, upd, showNotif, t.noMoney]);
+
+  const minigameReward = useCallback((earned: number) => {
+    upd({ coins: gs.coins + earned, totalEarned: gs.totalEarned + earned });
+    playCoinSound();
+    setPhase('menu');
+  }, [gs.coins, gs.totalEarned, upd]);
 
   if (isPaused) {
     return (
@@ -192,12 +240,18 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {phase !== 'menu' && phase !== 'tutorial' && phase !== 'info' && (
+      {phase !== 'menu' && phase !== 'tutorial' && phase !== 'info' && phase !== 'minigame' && (
         <div className="flex items-center justify-between px-4 py-2 bg-amber-800/90 text-white shrink-0">
           <button onClick={() => { playClickSound(); setPhase('menu'); }} className="text-2xl p-2">←</button>
-          <div className="flex items-center gap-2 bg-amber-900/50 rounded-full px-4 py-1">
-            <span className="text-xl">🪙</span>
-            <span className="font-bold text-lg">{gs.coins.toLocaleString()}</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-amber-900/50 rounded-full px-3 py-1">
+              <span className="text-lg">🪙</span>
+              <span className="font-bold">{gs.coins.toLocaleString()}</span>
+            </div>
+            <div className="flex items-center gap-1 bg-purple-900/50 rounded-full px-3 py-1">
+              <span className="text-lg">⭐</span>
+              <span className="font-bold text-sm">{gs.reputation}</span>
+            </div>
           </div>
           <button onClick={() => { upd({ soundOn: !gs.soundOn }); playClickSound(); }} className="text-2xl p-2">
             {gs.soundOn ? '🔊' : '🔇'}
@@ -212,19 +266,22 @@ export default function App() {
           {phase === 'info' && <InfoScreen key="info" t={t} lang={lang} setPhase={setPhase} />}
           {phase === 'shop' && <ShopScreen key="shop" gs={gs} t={t} lang={lang} buyBox={buyBox} setPhase={setPhase} />}
           {phase === 'unbox' && currentBox && (
-            <UnboxScreen key="unbox" box={currentBox} progress={boxOpenProgress} setProgress={setBoxOpenProgress} t={t} lang={lang} onOpen={openBox} />
+            <UnboxScreen key="unbox" box={currentBox} t={t} lang={lang} onOpen={openBox} />
           )}
           {phase === 'clean' && currentItem && (
-            <CleanScreen key="clean" item={currentItem} dirtLevel={dirtLevel} t={t} lang={lang} tool={TOOLS[gs.currentTool]} onClean={cleanItem} />
+            <CleanScreen key="clean" item={currentItem} t={t} lang={lang} onComplete={cleanComplete} />
           )}
-          {phase === 'sell' && currentItem && (
-            <SellScreen key="sell" item={currentItem} buyerReaction={buyerReaction} sellMultiplier={sellMultiplier}
-              setSellMultiplier={setSellMultiplier} gs={gs} t={t} lang={lang} price={getPrice()}
-              onSell={sellItem} onDouble={doubleReward} showReward={showReward} setShowReward={setShowReward}
+          {phase === 'sell' && currentItem && currentNPC && (
+            <SellScreen key="sell" item={currentItem} npc={currentNPC} mood={npcMood} gs={gs} t={t} lang={lang}
+              onSell={sellToNPC} onDouble={doubleReward} onScrap={scrapItem}
+              showReward={showReward} setShowReward={setShowReward}
               onNext={() => { setShowReward(false); setPhase('shop'); }} />
           )}
           {phase === 'upgrades' && (
             <UpgradesScreen key="upgrades" gs={gs} t={t} lang={lang} buyUpgrade={buyUpgrade} buyTool={buyTool} setPhase={setPhase} />
+          )}
+          {phase === 'minigame' && (
+            <MinigameScreen key="minigame" t={t} lang={lang} onComplete={minigameReward} />
           )}
         </AnimatePresence>
       </div>
@@ -235,29 +292,39 @@ export default function App() {
 // ============ MENU ============
 function MenuScreen({ gs, upd, setPhase }: { gs: GameState; upd: (u: Partial<GameState>) => void; setPhase: (p: GamePhase) => void }) {
   const t = L[gs.lang];
+  const passiveIncome = getPassiveIncome(gs.reputation);
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="flex flex-col items-center justify-center gap-6 p-8 w-full h-full">
-      <div className="text-center mb-4">
-        <motion.div animate={{ rotate: [0, -5, 5, 0] }} transition={{ repeat: Infinity, duration: 3 }} className="text-7xl mb-4">🏺</motion.div>
-        <h1 className="text-4xl font-black text-amber-900 drop-shadow-sm">{t.title}</h1>
-        <p className="text-xl text-amber-700 font-semibold mt-1">{t.subtitle}</p>
+      className="flex flex-col items-center justify-center gap-4 p-6 w-full h-full overflow-y-auto">
+      <div className="text-center mb-2">
+        <motion.div animate={{ rotate: [0, -5, 5, 0] }} transition={{ repeat: Infinity, duration: 3 }} className="text-6xl mb-2">🏺</motion.div>
+        <h1 className="text-3xl font-black text-amber-900">{t.title}</h1>
+        <p className="text-lg text-amber-700 font-semibold">{t.subtitle}</p>
       </div>
-      <div className="bg-white/60 rounded-2xl p-4 w-full max-w-xs">
+
+      <div className="bg-white/60 rounded-2xl p-4 w-full max-w-xs space-y-2">
         <div className="flex justify-between text-sm text-amber-800">
           <span>🪙 {gs.coins.toLocaleString()}</span>
           <span>📦 {gs.boxesOpened}</span>
           <span>🔍 {gs.itemsFound}</span>
         </div>
+        <div className="flex justify-between text-sm text-purple-700">
+          <span>⭐ {gs.reputation}</span>
+          <span className="text-green-600">+{passiveIncome}/с</span>
+        </div>
       </div>
-      <div className="flex flex-col gap-3 w-full max-w-xs">
+
+      <div className="flex flex-col gap-2 w-full max-w-xs">
         <BigBtn emoji="🎮" text={t.play} onClick={() => { playClickSound(); setPhase('shop'); }} primary />
+        <BigBtn emoji="💼" text={t.minigame} onClick={() => { playClickSound(); setPhase('minigame'); }} />
         <BigBtn emoji="⬆️" text={t.upgradesBtn} onClick={() => { playClickSound(); setPhase('upgrades'); }} />
         <BigBtn emoji="❓" text={t.tutorial} onClick={() => { playClickSound(); setPhase('tutorial'); }} />
         <BigBtn emoji="📋" text={t.info} onClick={() => { playClickSound(); setPhase('info'); }} />
       </div>
+
       <button onClick={() => { playClickSound(); upd({ lang: gs.lang === 'ru' ? 'en' : 'ru' }); }}
-        className="mt-4 px-4 py-2 bg-amber-200 rounded-full text-amber-800 font-bold text-sm">
+        className="mt-2 px-4 py-2 bg-amber-200 rounded-full text-amber-800 font-bold text-sm">
         {t.language}: {gs.lang === 'ru' ? '🇷🇺 Русский' : '🇬🇧 English'}
       </button>
     </motion.div>
@@ -267,7 +334,7 @@ function MenuScreen({ gs, upd, setPhase }: { gs: GameState; upd: (u: Partial<Gam
 function BigBtn({ emoji, text, onClick, primary }: { emoji: string; text: string; onClick: () => void; primary?: boolean }) {
   return (
     <motion.button whileTap={{ scale: 0.95 }} onClick={onClick}
-      className={`flex items-center gap-3 px-6 py-4 rounded-2xl font-bold text-lg shadow-lg ${
+      className={`flex items-center gap-3 px-5 py-3 rounded-2xl font-bold text-base shadow-lg ${
         primary ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white' : 'bg-white/80 text-amber-900'}`}>
       <span className="text-2xl">{emoji}</span><span>{text}</span>
     </motion.button>
@@ -310,16 +377,16 @@ function InfoScreen({ t, lang, setPhase }: { t: Translations; lang: Lang; setPha
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="flex flex-col items-center gap-4 p-6 w-full h-full overflow-y-auto">
-      <h2 className="text-2xl font-bold text-amber-900 mt-8">{t.info}</h2>
-      <div className="bg-white/80 rounded-2xl p-6 w-full max-w-sm text-sm text-gray-700 space-y-3">
-        <p>🎮 {isRu ? 'Покупайте коробки на барахолке, очищайте предметы от грязи и продавайте их!' : 'Buy boxes at the flea market, clean items from dirt, and sell them!'}</p>
-        <p>📦 {isRu ? 'Чем дороже коробка, тем выше шанс найти редкий предмет.' : 'The more expensive the box, the higher the chance of finding a rare item.'}</p>
-        <p>🧹 {isRu ? 'Водите пальцем по экрану, чтобы очистить предметы.' : 'Swipe your finger across the screen to clean items.'}</p>
-        <p>⬆️ {isRu ? 'Покупайте улучшения для лучшей прибыли!' : 'Buy upgrades for better profits!'}</p>
-        <p>💎 {isRu ? 'Редкость: Обычный → Необычный → Редкий → Эпический → Легендарный' : 'Rarity: Common → Uncommon → Rare → Epic → Legendary'}</p>
+      <h2 className="text-2xl font-bold text-amber-900 mt-4">{t.info}</h2>
+      <div className="bg-white/80 rounded-2xl p-5 w-full max-w-sm text-sm text-gray-700 space-y-2">
+        <p>🎮 {isRu ? 'Покупайте коробки, очищайте предметы, торгуйтесь с покупателями!' : 'Buy boxes, clean items, bargain with buyers!'}</p>
+        <p>⭐ {isRu ? 'Репутация открывает новые коробки и NPC' : 'Reputation unlocks new boxes and NPCs'}</p>
+        <p>🧹 {isRu ? 'Свайпайте по грязи, чтобы очистить предмет' : 'Swipe dirt to clean the item'}</p>
+        <p>💼 {isRu ? 'Мини-игра "Подработка" для заработка' : 'Minigame "Side Job" to earn coins'}</p>
+        <p>💰 {isRu ? 'Торгуйтесь: низкая/средняя/высокая цена' : 'Bargain: low/medium/high price'}</p>
       </div>
       <button onClick={() => { playClickSound(); setPhase('menu'); }}
-        className="mt-4 px-6 py-3 bg-amber-500 text-white rounded-xl font-bold shadow">{t.close}</button>
+        className="mt-2 px-6 py-3 bg-amber-500 text-white rounded-xl font-bold shadow">{t.close}</button>
     </motion.div>
   );
 }
@@ -328,170 +395,254 @@ function InfoScreen({ t, lang, setPhase }: { t: Translations; lang: Lang; setPha
 function ShopScreen({ gs, t, lang, buyBox, setPhase }: { gs: GameState; t: Translations; lang: Lang; buyBox: (b: BoxDef) => void; setPhase: (p: GamePhase) => void }) {
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
-      className="flex flex-col items-center gap-4 p-4 w-full h-full overflow-y-auto">
-      <h2 className="text-2xl font-bold text-amber-900 mt-2">{lang === 'ru' ? '🏪 Барахолка' : '🏪 Flea Market'}</h2>
-      <p className="text-amber-700 text-sm">{lang === 'ru' ? 'Выберите коробку' : 'Choose a box'}</p>
-      <div className="flex flex-col gap-3 w-full max-w-sm">
-        {BOXES.map(box => (
-          <motion.button key={box.id} whileTap={{ scale: 0.95 }} onClick={() => buyBox(box)}
-            className={`flex items-center gap-4 p-4 rounded-2xl shadow-lg border-2 ${
-              gs.coins >= box.price ? 'bg-white border-amber-300' : 'bg-gray-100 border-gray-300 opacity-60'}`}>
-            <span className="text-5xl">{box.emoji}</span>
-            <div className="flex-1 text-left">
-              <p className="font-bold text-amber-900">{box.name[lang]}</p>
-              <div className="flex gap-1 mt-1">
-                {(Object.entries(box.rarityWeights) as [Rarity, number][]).map(([r, w]) =>
-                  w > 0 ? <div key={r} className="w-3 h-3 rounded-full" style={{ backgroundColor: RARITY_COLORS[r], opacity: w / 60 }} /> : null
-                )}
+      className="flex flex-col items-center gap-3 p-4 w-full h-full overflow-y-auto">
+      <h2 className="text-2xl font-bold text-amber-900">{lang === 'ru' ? '🏪 Барахолка' : '🏪 Flea Market'}</h2>
+      <div className="flex flex-col gap-2 w-full max-w-sm">
+        {BOXES.map(box => {
+          const locked = gs.reputation < box.requiredRep;
+          return (
+            <motion.button key={box.id} whileTap={{ scale: 0.95 }} onClick={() => buyBox(box)}
+              className={`flex items-center gap-3 p-3 rounded-2xl shadow-lg border-2 ${
+                locked ? 'bg-gray-200 border-gray-400 opacity-60' :
+                gs.coins >= box.price ? 'bg-white border-amber-300' : 'bg-gray-100 border-gray-300 opacity-70'}`}>
+              <span className="text-4xl">{box.emoji}</span>
+              <div className="flex-1 text-left">
+                <p className="font-bold text-amber-900 text-sm">{box.name[lang]}</p>
+                {locked && <p className="text-xs text-red-600">{t.repRequired.replace('{n}', box.requiredRep.toString())}</p>}
+                <div className="flex gap-1 mt-1">
+                  {(Object.entries(box.rarityWeights) as [Rarity, number][]).map(([r, w]) =>
+                    w > 0 ? <div key={r} className="w-2 h-2 rounded-full" style={{ backgroundColor: RARITY_COLORS[r], opacity: w / 60 }} /> : null
+                  )}
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-lg">🪙</span>
-              <span className={`font-bold ${gs.coins >= box.price ? 'text-amber-700' : 'text-red-500'}`}>{box.price}</span>
-            </div>
-          </motion.button>
-        ))}
+              {!locked && (
+                <div className="flex items-center gap-1">
+                  <span>🪙</span>
+                  <span className={`font-bold ${gs.coins >= box.price ? 'text-amber-700' : 'text-red-500'}`}>{box.price}</span>
+                </div>
+              )}
+              {locked && <span className="text-2xl">🔒</span>}
+            </motion.button>
+          );
+        })}
       </div>
       <button onClick={() => { playClickSound(); setPhase('upgrades'); }}
-        className="mt-4 px-6 py-3 bg-purple-500 text-white rounded-xl font-bold shadow-lg">⬆️ {t.upgradesBtn}</button>
+        className="mt-2 px-6 py-3 bg-purple-500 text-white rounded-xl font-bold shadow-lg">⬆️ {t.upgradesBtn}</button>
     </motion.div>
   );
 }
 
-// ============ UNBOX ============
-function UnboxScreen({ box, progress, setProgress, t, lang, onOpen }: { box: BoxDef; progress: number; setProgress: (v: number) => void; t: Translations; lang: Lang; onOpen: () => void }) {
-  const lastPos = useRef<{ x: number; y: number } | null>(null);
-  const sndTimer = useRef(0);
+// ============ UNBOX (with tape + flaps) ============
+function UnboxScreen({ box, t, lang, onOpen }: { box: BoxDef; t: Translations; lang: Lang; onOpen: () => void }) {
+  const [tapeTorn, setTapeTorn] = useState(false);
+  const [tapeProgress, setTapeProgress] = useState(0);
+  const [flaps, setFlaps] = useState([false, false, false, false]); // top, right, bottom, left
+  const lastPosRef = useRef<{ x: number; y: number } | null>(null);
 
-  const handleMove = useCallback((cx: number, cy: number) => {
-    if (progress >= 100) return;
-    if (lastPos.current) {
-      const dx = cx - lastPos.current.x;
-      const dy = cy - lastPos.current.y;
+  const handleTapeSwipe = useCallback((cx: number, cy: number) => {
+    if (tapeTorn) return;
+    if (lastPosRef.current) {
+      const dx = cx - lastPosRef.current.x;
+      const dy = cy - lastPosRef.current.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > 5) {
-        const np = Math.min(100, progress + dist * 0.5);
-        setProgress(np);
-        const now = Date.now();
-        if (now - sndTimer.current > 150) { playBrushSound(); sndTimer.current = now; }
-        if (np >= 100) setTimeout(onOpen, 300);
+        const newProgress = Math.min(100, tapeProgress + dist * 0.8);
+        setTapeProgress(newProgress);
+        playBrushSound();
+        if (newProgress >= 100) {
+          setTapeTorn(true);
+          playBoxOpenSound();
+        }
       }
     }
-    lastPos.current = { x: cx, y: cy };
-  }, [progress, setProgress, onOpen]);
+    lastPosRef.current = { x: cx, y: cy };
+  }, [tapeTorn, tapeProgress]);
+
+  const handleFlapSwipe = useCallback((flapIndex: number, direction: 'up' | 'right' | 'down' | 'left') => {
+    if (!tapeTorn || flaps[flapIndex]) return;
+    playTapSound();
+    const newFlaps = [...flaps];
+    newFlaps[flapIndex] = true;
+    setFlaps(newFlaps);
+
+    if (newFlaps.every(f => f)) {
+      setTimeout(() => onOpen(), 500);
+    }
+  }, [tapeTorn, flaps, onOpen]);
+
+  const allFlapsOpen = flaps.every(f => f);
 
   return (
     <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
-      className="flex flex-col items-center justify-center gap-6 p-6 w-full h-full">
+      className="flex flex-col items-center justify-center gap-4 p-6 w-full h-full">
       <h2 className="text-xl font-bold text-amber-900">{t.newBox}</h2>
-      <div className="w-full max-w-xs">
-        <div className="bg-gray-300 rounded-full h-4 overflow-hidden">
-          <div className="h-full bg-gradient-to-r from-amber-400 to-orange-500 rounded-full transition-all" style={{ width: `${progress}%` }} />
-        </div>
-        <p className="text-center text-sm text-amber-700 mt-2">{t.swipeToClean}</p>
-      </div>
-      <div className="relative w-64 h-64 flex items-center justify-center cursor-pointer"
-        onPointerDown={e => { lastPos.current = { x: e.clientX, y: e.clientY }; playTapSound(); }}
-        onPointerMove={e => { if (e.buttons > 0) handleMove(e.clientX, e.clientY); }}
-        onPointerUp={() => { lastPos.current = null; }}
-        onPointerLeave={() => { lastPos.current = null; }}>
-        <motion.div animate={progress > 80 ? { y: -20, rotateX: -30 } : {}} className="text-9xl">{box.emoji}</motion.div>
-        <div className="absolute inset-0 rounded-3xl pointer-events-none"
-          style={{ background: `rgba(101, 67, 33, ${(100 - progress) / 100 * 0.7})`, mixBlendMode: 'multiply' }} />
-        {progress > 70 && (
-          <motion.div animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 0.5 }}
-            className="absolute inset-0 flex items-center justify-center text-4xl pointer-events-none">✨</motion.div>
-        )}
-      </div>
-      {progress >= 100 && (
-        <motion.button initial={{ scale: 0 }} animate={{ scale: 1 }} onClick={onOpen}
-          className="px-8 py-4 bg-green-500 text-white rounded-2xl font-bold text-xl shadow-xl">
-          {lang === 'ru' ? '🔓 Открыть!' : '🔓 Open!'}
-        </motion.button>
+
+      {!tapeTorn ? (
+        <>
+          <p className="text-amber-700 text-sm">{t.tearTape}</p>
+          <div className="w-full max-w-xs">
+            <div className="bg-gray-300 rounded-full h-3 overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-amber-400 to-orange-500 rounded-full transition-all" style={{ width: `${tapeProgress}%` }} />
+            </div>
+          </div>
+          <div className="relative w-56 h-56 flex items-center justify-center"
+            onPointerDown={e => { lastPosRef.current = { x: e.clientX, y: e.clientY }; }}
+            onPointerMove={e => { if (e.buttons > 0) handleTapeSwipe(e.clientX, e.clientY); }}
+            onPointerUp={() => { lastPosRef.current = null; }}>
+            <span className="text-8xl">{box.emoji}</span>
+            {/* Tape overlay */}
+            <div className="absolute top-1/2 left-0 right-0 h-8 bg-gray-400/80 -translate-y-1/2 flex items-center justify-center">
+              <div className="w-full h-full relative overflow-hidden">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-gray-500 to-transparent"
+                  style={{ clipPath: `inset(0 ${100 - tapeProgress}% 0 0)` }} />
+                <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-white">
+                  {t.tape}
+                </span>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-amber-700 text-sm">{t.openAllFlaps}</p>
+          <div className="relative w-56 h-56">
+            {/* Box base */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-8xl">{box.emoji}</span>
+            </div>
+
+            {/* Flaps */}
+            {/* Top flap */}
+            <motion.button
+              className="absolute top-0 left-1/2 -translate-x-1/2 w-20 h-12 bg-amber-700 rounded-t-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
+              animate={flaps[0] ? { rotateX: -120, y: -30 } : {}}
+              onClick={() => handleFlapSwipe(0, 'up')}
+              whileTap={{ scale: 0.95 }}
+            >
+              {flaps[0] ? '✓' : '↑'}
+            </motion.button>
+
+            {/* Right flap */}
+            <motion.button
+              className="absolute top-1/2 right-0 -translate-y-1/2 w-12 h-20 bg-amber-700 rounded-r-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
+              animate={flaps[1] ? { rotateY: 120, x: 30 } : {}}
+              onClick={() => handleFlapSwipe(1, 'right')}
+              whileTap={{ scale: 0.95 }}
+            >
+              {flaps[1] ? '✓' : '→'}
+            </motion.button>
+
+            {/* Bottom flap */}
+            <motion.button
+              className="absolute bottom-0 left-1/2 -translate-x-1/2 w-20 h-12 bg-amber-700 rounded-b-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
+              animate={flaps[2] ? { rotateX: 120, y: 30 } : {}}
+              onClick={() => handleFlapSwipe(2, 'down')}
+              whileTap={{ scale: 0.95 }}
+            >
+              {flaps[2] ? '✓' : '↓'}
+            </motion.button>
+
+            {/* Left flap */}
+            <motion.button
+              className="absolute top-1/2 left-0 -translate-y-1/2 w-12 h-20 bg-amber-700 rounded-l-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-xs"
+              animate={flaps[3] ? { rotateY: -120, x: -30 } : {}}
+              onClick={() => handleFlapSwipe(3, 'left')}
+              whileTap={{ scale: 0.95 }}
+            >
+              {flaps[3] ? '✓' : '←'}
+            </motion.button>
+          </div>
+
+          {allFlapsOpen && (
+            <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="text-4xl">✨</motion.div>
+          )}
+        </>
       )}
     </motion.div>
   );
 }
 
-// ============ CLEAN ============
-function CleanScreen({ item, dirtLevel, t, lang, tool, onClean }: { item: Item; dirtLevel: number; t: Translations; lang: Lang; tool: typeof TOOLS[0]; onClean: (a: number) => void }) {
-  const lastPos = useRef<{ x: number; y: number } | null>(null);
-  const sndTimer = useRef(0);
+// ============ CLEAN (Canvas-based) ============
+function CleanScreen({ item, t, lang, onComplete }: { item: Item; t: Translations; lang: Lang; onComplete: () => void }) {
+  const [cleanPercent, setCleanPercent] = useState(0);
+  const [completed, setCompleted] = useState(false);
 
-  const handleMove = useCallback((cx: number, cy: number) => {
-    if (lastPos.current) {
-      const dx = cx - lastPos.current.x;
-      const dy = cy - lastPos.current.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > 3) {
-        onClean(dist * 0.3);
-        const now = Date.now();
-        if (now - sndTimer.current > 120) { playPolishSound(); sndTimer.current = now; }
-      }
+  const handleClean = (percent: number) => {
+    setCleanPercent(percent);
+  };
+
+  const handleComplete = () => {
+    if (!completed) {
+      setCompleted(true);
+      playDingSound();
+      setTimeout(onComplete, 1000);
     }
-    lastPos.current = { x: cx, y: cy };
-  }, [onClean]);
-
-  const cleanPct = 100 - dirtLevel;
+  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="flex flex-col items-center justify-center gap-4 p-6 w-full h-full">
       <h2 className="text-xl font-bold text-amber-900">{t.found}</h2>
+
       <div className="w-full max-w-xs">
         <div className="flex justify-between text-sm text-amber-700 mb-1">
-          <span>{t.dirtLayer}</span><span>{Math.round(cleanPct)}%</span>
+          <span>{t.dirtLayer}</span>
+          <span>{Math.round(cleanPercent)}%</span>
         </div>
-        <div className="bg-gray-300 rounded-full h-4 overflow-hidden">
-          <div className="h-full bg-gradient-to-r from-green-400 to-emerald-500 rounded-full transition-all" style={{ width: `${cleanPct}%` }} />
+        <div className="bg-gray-300 rounded-full h-3 overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-green-400 to-emerald-500 rounded-full transition-all" style={{ width: `${cleanPercent}%` }} />
         </div>
       </div>
-      <div className="flex items-center gap-2 bg-white/60 rounded-full px-4 py-2">
-        <span className="text-2xl">{tool.emoji}</span>
-        <span className="text-sm font-bold text-amber-800">{tool.name[lang]}</span>
-      </div>
-      <div className="relative w-56 h-56 flex items-center justify-center cursor-pointer"
-        onPointerDown={e => { lastPos.current = { x: e.clientX, y: e.clientY }; }}
-        onPointerMove={e => { if (e.buttons > 0) handleMove(e.clientX, e.clientY); }}
-        onPointerUp={() => { lastPos.current = null; }}
-        onPointerLeave={() => { lastPos.current = null; }}>
-        <div className="text-8xl relative z-10">{item.emoji}</div>
-        <div className="absolute inset-4 rounded-full pointer-events-none z-20"
-          style={{ background: dirtLevel > 0 ? `radial-gradient(circle, rgba(101,67,33,${dirtLevel / 100 * 0.85}) 0%, rgba(60,40,20,${dirtLevel / 100 * 0.9}) 100%)` : 'transparent' }} />
-        {cleanPct > 80 && (
-          <motion.div animate={{ opacity: [0.3, 0.7, 0.3], scale: [1, 1.1, 1] }} transition={{ repeat: Infinity, duration: 1.5 }}
-            className="absolute inset-0 rounded-full pointer-events-none z-0"
-            style={{ boxShadow: `0 0 40px ${RARITY_COLORS[item.rarity]}` }} />
-        )}
-        {cleanPct > 50 && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="absolute bottom-0 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-xs font-bold text-white z-30"
-            style={{ backgroundColor: RARITY_COLORS[item.rarity] }}>
-            {t.rarity[item.rarity]}
+
+      <div className="relative">
+        <DirtCanvas emoji={item.emoji} size={220} onClean={handleClean} onComplete={handleComplete} />
+
+        {/* Sparkles when complete */}
+        {completed && (
+          <motion.div initial={{ opacity: 0, scale: 0 }} animate={{ opacity: 1, scale: 1 }}
+            className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="text-6xl">✨</div>
           </motion.div>
         )}
       </div>
+
+      {cleanPercent > 50 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+          className="px-3 py-1 rounded-full text-xs font-bold text-white"
+          style={{ backgroundColor: RARITY_COLORS[item.rarity] }}>
+          {t.rarity[item.rarity]}
+        </motion.div>
+      )}
+
       <p className="text-amber-700 text-sm">{t.swipeToClean}</p>
     </motion.div>
   );
 }
 
-// ============ SELL ============
-function SellScreen({ item, buyerReaction, sellMultiplier, setSellMultiplier, gs, t, lang, price, onSell, onDouble, showReward, setShowReward, onNext }: {
-  item: Item; buyerReaction: 'want' | 'maybe' | 'no'; sellMultiplier: number; setSellMultiplier: (v: number) => void;
-  gs: GameState; t: Translations; lang: Lang; price: number;
-  onSell: () => void; onDouble: () => void; showReward: boolean; setShowReward: (v: boolean) => void; onNext: () => void;
+// ============ SELL (with bargaining) ============
+function SellScreen({ item, npc, mood, gs, t, lang, onSell, onDouble, onScrap, showReward, setShowReward, onNext }: {
+  item: Item; npc: NPCDef; mood: 'low' | 'mid' | 'high'; gs: GameState; t: Translations; lang: Lang;
+  onSell: (level: 'low' | 'mid' | 'high') => void; onDouble: () => void; onScrap: () => void;
+  showReward: boolean; setShowReward: (v: boolean) => void; onNext: () => void;
 }) {
-  const buyerEmojis = { want: '😍', maybe: '🤔', no: '😐' };
-  const buyerTexts = { want: t.buyerThoughts.want, maybe: t.buyerThoughts.maybe, no: t.buyerThoughts.no };
+  const basePrice = Math.floor(item.basePrice * getPriceBonusFromRep(gs.reputation) * (1 + gs.upgradeLevels.display * 0.2));
+  const lowPrice = basePrice;
+  const midPrice = Math.floor(basePrice * 1.3);
+  const highPrice = Math.floor(basePrice * 1.6);
 
   if (showReward) {
+    const finalPrice = Math.floor(basePrice * npc.priceMultiplier);
     return (
       <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
         className="flex flex-col items-center justify-center gap-6 p-6 w-full h-full">
         <motion.div animate={{ rotate: [0, 10, -10, 0] }} transition={{ repeat: Infinity, duration: 1 }} className="text-7xl">🪙</motion.div>
-        <h2 className="text-3xl font-black text-amber-900">+{price}</h2>
+        <h2 className="text-3xl font-black text-amber-900">+{finalPrice}</h2>
         <p className="text-amber-700">{t.sold}</p>
+        {npc.repChange !== 0 && (
+          <p className={`text-sm font-bold ${npc.repChange > 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {npc.repChange > 0 ? t.repGain.replace('{n}', npc.repChange.toString()) : t.repLoss.replace('{n}', Math.abs(npc.repChange).toString())}
+          </p>
+        )}
         <div className="flex flex-col gap-3 w-full max-w-xs">
           <button onClick={onDouble}
             className="px-6 py-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-2xl font-bold text-lg shadow-lg">
@@ -505,43 +656,53 @@ function SellScreen({ item, buyerReaction, sellMultiplier, setSellMultiplier, gs
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="flex flex-col items-center justify-center gap-4 p-6 w-full h-full">
+      className="flex flex-col items-center justify-center gap-3 p-4 w-full h-full overflow-y-auto">
+      {/* NPC */}
       <motion.div initial={{ x: -100, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="flex flex-col items-center">
         <div className="relative">
-          <span className="text-6xl">{buyerEmojis[buyerReaction]}</span>
+          <span className="text-6xl">{npc.emoji}</span>
           <motion.div animate={{ y: [0, -5, 0] }} transition={{ repeat: Infinity, duration: 2 }}
-            className="absolute -top-12 -right-8 bg-white rounded-2xl px-3 py-1 shadow-lg text-sm font-bold text-gray-700 whitespace-nowrap">
-            {buyerTexts[buyerReaction]}
+            className="absolute -top-14 -right-10 bg-white rounded-2xl px-3 py-2 shadow-lg text-xs font-bold text-gray-700 max-w-[140px] text-center">
+            {npc.moods[mood][lang]}
             <div className="absolute -bottom-2 left-4 w-4 h-4 bg-white rotate-45" />
           </motion.div>
         </div>
+        <p className="text-sm font-bold text-amber-900 mt-1">{npc.name[lang]}</p>
       </motion.div>
-      <motion.div className={`relative p-6 rounded-3xl bg-gradient-to-br ${RARITY_BG[item.rarity]} shadow-xl ${RARITY_GLOW[item.rarity]}`}
+
+      {/* Item */}
+      <motion.div className={`relative p-4 rounded-3xl bg-gradient-to-br ${RARITY_BG[item.rarity]} shadow-xl ${RARITY_GLOW[item.rarity]}`}
         animate={{ scale: [1, 1.02, 1] }} transition={{ repeat: Infinity, duration: 2 }}>
-        <span className="text-7xl">{item.emoji}</span>
+        <span className="text-6xl">{item.emoji}</span>
       </motion.div>
+
       <div className="text-center">
-        <h3 className="text-xl font-bold text-amber-900">{item.name[lang]}</h3>
+        <h3 className="text-lg font-bold text-amber-900">{item.name[lang]}</h3>
         <div className="inline-block px-3 py-1 rounded-full text-xs font-bold text-white mt-1"
           style={{ backgroundColor: RARITY_COLORS[item.rarity] }}>{t.rarity[item.rarity]}</div>
       </div>
-      <div className="flex items-center gap-2 bg-white/80 rounded-2xl px-6 py-3 shadow">
-        <span className="text-2xl">🪙</span>
-        <span className="text-3xl font-black text-amber-800">{price}</span>
+
+      {/* Price buttons */}
+      <div className="flex flex-col gap-2 w-full max-w-xs">
+        <motion.button whileTap={{ scale: 0.95 }} onClick={() => { playClickSound(); onSell('low'); }}
+          className="px-4 py-3 bg-green-500 text-white rounded-xl font-bold shadow">
+          {t.lowPrice} 🪙{lowPrice}
+        </motion.button>
+        <motion.button whileTap={{ scale: 0.95 }} onClick={() => { playClickSound(); onSell('mid'); }}
+          className="px-4 py-3 bg-blue-500 text-white rounded-xl font-bold shadow">
+          {t.midPrice} 🪙{midPrice}
+        </motion.button>
+        <motion.button whileTap={{ scale: 0.95 }} onClick={() => { playClickSound(); onSell('high'); }}
+          className="px-4 py-3 bg-purple-500 text-white rounded-xl font-bold shadow">
+          {t.highPrice} 🪙{highPrice}
+        </motion.button>
       </div>
-      {sellMultiplier === 1 && (
-        <button onClick={() => { playClickSound(); setSellMultiplier(2); }}
-          className="px-4 py-2 bg-purple-100 text-purple-700 rounded-xl font-bold text-sm">🎬 x2</button>
-      )}
-      {sellMultiplier === 2 && (
-        <div className="px-4 py-2 bg-purple-200 text-purple-800 rounded-xl font-bold text-sm">
-          x2 {lang === 'ru' ? 'активно' : 'active'}
-        </div>
-      )}
-      <motion.button whileTap={{ scale: 0.95 }} onClick={() => { playDingSound(); onSell(); }}
-        className="px-10 py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-2xl font-bold text-xl shadow-xl">
-        💰 {t.sell}
-      </motion.button>
+
+      {/* Scrap button */}
+      <button onClick={() => { playClickSound(); onScrap(); }}
+        className="px-4 py-2 bg-gray-400 text-white rounded-xl font-bold text-sm shadow">
+        🗑️ {t.scrapValue}
+      </button>
     </motion.div>
   );
 }
@@ -552,9 +713,9 @@ function UpgradesScreen({ gs, t, lang, buyUpgrade, buyTool, setPhase }: {
 }) {
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
-      className="flex flex-col items-center gap-4 p-4 w-full h-full overflow-y-auto pb-8">
-      <h2 className="text-2xl font-bold text-amber-900 mt-2">⬆️ {t.upgradesBtn}</h2>
-      {/* Tools */}
+      className="flex flex-col items-center gap-3 p-4 w-full h-full overflow-y-auto pb-8">
+      <h2 className="text-2xl font-bold text-amber-900">⬆️ {t.upgradesBtn}</h2>
+
       <div className="w-full max-w-sm">
         <h3 className="text-lg font-bold text-amber-800 mb-2">{lang === 'ru' ? '🔧 Инструменты' : '🔧 Tools'}</h3>
         <div className="flex flex-col gap-2">
@@ -565,18 +726,18 @@ function UpgradesScreen({ gs, t, lang, buyUpgrade, buyTool, setPhase }: {
               <div key={tool.id} className={`flex items-center gap-3 p-3 rounded-xl ${owned ? 'bg-green-100 border-2 border-green-300' : 'bg-white border-2 border-gray-200'}`}>
                 <span className="text-3xl">{tool.emoji}</span>
                 <div className="flex-1">
-                  <p className="font-bold text-amber-900">{tool.name[lang]}</p>
+                  <p className="font-bold text-amber-900 text-sm">{tool.name[lang]}</p>
                   <p className="text-xs text-gray-600">{lang === 'ru' ? 'Сила' : 'Power'}: {'⭐'.repeat(tool.cleanPower)}</p>
                 </div>
-                {owned && <span className="text-green-600 font-bold text-sm">✓</span>}
-                {canBuy && <button onClick={() => buyTool(idx)} className="px-3 py-1 bg-amber-500 text-white rounded-lg font-bold text-sm">🪙 {tool.price}</button>}
-                {!owned && !canBuy && <span className="text-gray-400 text-sm">🔒</span>}
+                {owned && <span className="text-green-600 font-bold">✓</span>}
+                {canBuy && <button onClick={() => buyTool(idx)} className="px-3 py-1 bg-amber-500 text-white rounded-lg font-bold text-sm">🪙{tool.price}</button>}
+                {!owned && !canBuy && <span className="text-gray-400">🔒</span>}
               </div>
             );
           })}
         </div>
       </div>
-      {/* Upgrades */}
+
       <div className="w-full max-w-sm">
         <h3 className="text-lg font-bold text-amber-800 mb-2">{lang === 'ru' ? '🏪 Лавка' : '🏪 Shop'}</h3>
         <div className="flex flex-col gap-2">
@@ -589,11 +750,11 @@ function UpgradesScreen({ gs, t, lang, buyUpgrade, buyTool, setPhase }: {
               <div key={upg.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border-2 border-gray-200">
                 <span className="text-3xl">{upg.emoji}</span>
                 <div className="flex-1">
-                  <p className="font-bold text-amber-900">{upg.name[lang]}</p>
+                  <p className="font-bold text-amber-900 text-sm">{upg.name[lang]}</p>
                   <p className="text-xs text-gray-600">{upg.description[lang]}</p>
                   <div className="flex gap-1 mt-1">
                     {Array.from({ length: upg.maxLevel }).map((_, i) => (
-                      <div key={i} className={`w-4 h-2 rounded-full ${i < lvl ? 'bg-amber-500' : 'bg-gray-300'}`} />
+                      <div key={i} className={`w-3 h-2 rounded-full ${i < lvl ? 'bg-amber-500' : 'bg-gray-300'}`} />
                     ))}
                   </div>
                 </div>
@@ -601,15 +762,166 @@ function UpgradesScreen({ gs, t, lang, buyUpgrade, buyTool, setPhase }: {
                   ? <span className="px-2 py-1 bg-gray-200 text-gray-600 rounded-lg font-bold text-xs">{t.maxLevel}</span>
                   : <button onClick={() => buyUpgrade(upg.id)}
                       className={`px-3 py-1 rounded-lg font-bold text-sm ${canAfford ? 'bg-amber-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
-                      🪙 {price}
+                      🪙{price}
                     </button>}
               </div>
             );
           })}
         </div>
       </div>
+
       <button onClick={() => { playClickSound(); setPhase('shop'); }}
         className="mt-2 px-6 py-3 bg-amber-500 text-white rounded-xl font-bold shadow-lg">← {t.back}</button>
+    </motion.div>
+  );
+}
+
+// ============ MINIGAME ============
+interface ConveyorItem {
+  id: number;
+  emoji: string;
+  isTrash: boolean;
+  x: number;
+  tapped: boolean;
+}
+
+function MinigameScreen({ t, lang, onComplete }: { t: Translations; lang: Lang; onComplete: (earned: number) => void }) {
+  const [started, setStarted] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(30);
+  const [score, setScore] = useState(0);
+  const [items, setItems] = useState<ConveyorItem[]>([]);
+  const itemIdRef = useRef(0);
+
+  const trashEmojis = ['🍎', '👟', '🗑️', '🧦', '📰'];
+  const valuableEmojis = ['⌚', '🏺', '💎', '🖼️', '📿'];
+
+  useEffect(() => {
+    if (!started) return;
+
+    const timer = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setTimeout(() => onComplete(Math.max(0, score)), 500);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [started, score, onComplete]);
+
+  useEffect(() => {
+    if (!started || timeLeft <= 0) return;
+
+    const spawner = setInterval(() => {
+      const isTrash = Math.random() < 0.6;
+      const emojis = isTrash ? trashEmojis : valuableEmojis;
+      const emoji = emojis[Math.floor(Math.random() * emojis.length)];
+      setItems(prev => [...prev, {
+        id: itemIdRef.current++,
+        emoji,
+        isTrash,
+        x: 100,
+        tapped: false,
+      }]);
+    }, 800);
+
+    return () => clearInterval(spawner);
+  }, [started, timeLeft]);
+
+  useEffect(() => {
+    if (!started || timeLeft <= 0) return;
+
+    const mover = setInterval(() => {
+      setItems(prev => prev
+        .map(item => ({ ...item, x: item.x - 2 }))
+        .filter(item => item.x > -20)
+      );
+    }, 50);
+
+    return () => clearInterval(mover);
+  }, [started, timeLeft]);
+
+  const tapItem = (id: number, isTrash: boolean) => {
+    setItems(prev => prev.map(item => item.id === id ? { ...item, tapped: true } : item));
+    if (isTrash) {
+      setScore(prev => prev + 1);
+      playClickSound();
+    } else {
+      setScore(prev => prev - 2);
+      playTapSound();
+    }
+    setTimeout(() => {
+      setItems(prev => prev.filter(item => item.id !== id));
+    }, 200);
+  };
+
+  if (!started) {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="flex flex-col items-center justify-center gap-6 p-6 w-full h-full">
+        <h2 className="text-2xl font-bold text-amber-900">💼 {t.minigameTitle}</h2>
+        <p className="text-amber-700 text-center">{t.minigameDesc}</p>
+        <div className="flex gap-4 text-4xl">
+          <span>🍎</span><span>👟</span><span>= ✓</span>
+        </div>
+        <div className="flex gap-4 text-4xl">
+          <span>⌚</span><span>💎</span><span>= ✗</span>
+        </div>
+        <button onClick={() => { playClickSound(); setStarted(true); }}
+          className="px-8 py-4 bg-green-500 text-white rounded-2xl font-bold text-xl shadow-xl">
+          {t.minigameStart}
+        </button>
+      </motion.div>
+    );
+  }
+
+  if (timeLeft <= 0) {
+    return (
+      <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+        className="flex flex-col items-center justify-center gap-6 p-6 w-full h-full">
+        <h2 className="text-2xl font-bold text-amber-900">{t.minigameEnd}</h2>
+        <div className="text-6xl">🪙</div>
+        <p className="text-3xl font-black text-amber-800">+{Math.max(0, score)}</p>
+        <p className="text-amber-700">{t.minigameScore}</p>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="flex flex-col items-center gap-4 p-4 w-full h-full">
+      <div className="flex justify-between w-full max-w-sm">
+        <div className="bg-amber-100 rounded-full px-4 py-2 font-bold text-amber-800">⏱️ {timeLeft}s</div>
+        <div className="bg-green-100 rounded-full px-4 py-2 font-bold text-green-800">🪙 {score}</div>
+      </div>
+
+      {/* Conveyor */}
+      <div className="relative w-full max-w-sm h-64 bg-gray-200 rounded-2xl overflow-hidden border-4 border-gray-400">
+        {/* Conveyor belt lines */}
+        <div className="absolute inset-0 flex flex-col justify-around opacity-30">
+          {[...Array(8)].map((_, i) => (
+            <div key={i} className="h-1 bg-gray-500" />
+          ))}
+        </div>
+
+        {/* Items */}
+        {items.filter(item => !item.tapped).map(item => (
+          <motion.button
+            key={item.id}
+            className="absolute text-4xl"
+            style={{ left: `${item.x}%`, top: '50%', transform: 'translateY(-50%)' }}
+            onClick={() => tapItem(item.id, item.isTrash)}
+            whileTap={{ scale: 0.8 }}
+          >
+            {item.emoji}
+          </motion.button>
+        ))}
+      </div>
+
+      <p className="text-amber-700 text-sm text-center">{t.minigameDesc}</p>
     </motion.div>
   );
 }
