@@ -65,6 +65,7 @@ export default function App() {
   const [currentNPC, setCurrentNPC] = useState<NPCDef | null>(null);
   const [npcMood, setNpcMood] = useState<'low' | 'mid' | 'high'>('mid');
   const [showReward, setShowReward] = useState(false);
+  const [lastSalePrice, setLastSalePrice] = useState(0);
   const [notification, setNotification] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
 
@@ -134,16 +135,27 @@ export default function App() {
 
   const sellToNPC = useCallback((priceLevel: 'low' | 'mid' | 'high') => {
     if (!currentItem || !currentNPC) return;
+
+    // Calculate base price with bonuses
     const basePrice = currentItem.basePrice * getPriceBonusFromRep(gs.reputation);
     const displayBonus = 1 + gs.upgradeLevels.display * 0.2;
     const price = basePrice * displayBonus;
 
+    // Apply price level multiplier
     let multiplier = 1.0;
     if (priceLevel === 'low') multiplier = 1.0;
     else if (priceLevel === 'mid') multiplier = 1.3;
     else multiplier = 1.6;
 
     const offerPrice = Math.floor(price * multiplier);
+
+    // Debug log
+    console.log('=== SALE DEBUG ===');
+    console.log('Selected price level:', priceLevel);
+    console.log('Item base price:', currentItem.basePrice);
+    console.log('Calculated offer price:', offerPrice);
+
+    // Check NPC max tolerance
     const npcMaxMultiplier = npcMood === 'low' ? 1.0 : npcMood === 'mid' ? 1.4 : 1.8;
     const npcMax = Math.floor(price * npcMaxMultiplier);
 
@@ -151,6 +163,7 @@ export default function App() {
       // Too expensive
       playTapSound();
       showNotif(t.tooExpensive);
+      console.log('Too expensive! NPC max:', npcMax);
       // Try next NPC
       const newNpc = rollNPC(gs.reputation);
       setCurrentNPC(newNpc);
@@ -159,16 +172,26 @@ export default function App() {
       return;
     }
 
-    // Deal!
+    // Deal! Calculate final price with NPC multiplier
     playCoinSound();
     const finalPrice = Math.floor(offerPrice * currentNPC.priceMultiplier);
     const repChange = currentNPC.repChange;
+
+    console.log('Final sale price:', finalPrice);
+    console.log('==================');
+
     upd({
       coins: gs.coins + finalPrice,
       totalEarned: gs.totalEarned + finalPrice,
       reputation: Math.max(0, gs.reputation + repChange),
       salesCount: gs.salesCount + 1,
     });
+
+    // Save final price for reward screen
+    setLastSalePrice(finalPrice);
+
+    // Show visual confirmation
+    showNotif(`${t.soldFor} ${finalPrice} 🪙`);
     setShowReward(true);
 
     // Check for free box from helper
@@ -179,7 +202,7 @@ export default function App() {
         setTimeout(() => { showNotif(t.freeBox); upd({ coins: gs.coins + finalPrice + BOXES[0].price }); }, 1500);
       }
     }
-  }, [currentItem, currentNPC, gs, npcMood, upd, showNotif, t.tooExpensive, t.freeBox]);
+  }, [currentItem, currentNPC, gs, npcMood, upd, showNotif, t.tooExpensive, t.freeBox, t.soldFor]);
 
   const scrapItem = useCallback(() => {
     upd({ coins: gs.coins + 5, totalEarned: gs.totalEarned + 5 });
@@ -188,15 +211,13 @@ export default function App() {
   }, [gs.coins, gs.totalEarned, upd]);
 
   const doubleReward = useCallback(() => {
-    if (!currentItem || !currentNPC) return;
-    const basePrice = currentItem.basePrice * getPriceBonusFromRep(gs.reputation);
-    const displayBonus = 1 + gs.upgradeLevels.display * 0.2;
-    const bonus = Math.floor(basePrice * displayBonus * currentNPC.priceMultiplier);
+    // Double the last sale price
+    const bonus = lastSalePrice;
     upd({ coins: gs.coins + bonus, totalEarned: gs.totalEarned + bonus });
     playCoinSound();
     setShowReward(false);
     setPhase('shop');
-  }, [currentItem, currentNPC, gs, upd]);
+  }, [lastSalePrice, gs.coins, gs.totalEarned, upd]);
 
   const buyUpgrade = useCallback((id: string) => {
     const upg = UPGRADES.find(u => u.id === id);
@@ -274,6 +295,7 @@ export default function App() {
           )}
           {phase === 'sell' && currentItem && currentNPC && (
             <SellScreen key="sell" item={currentItem} npc={currentNPC} mood={npcMood} gs={gs} t={t} lang={lang}
+              lastSalePrice={lastSalePrice}
               onSell={sellToNPC} onDouble={doubleReward} onScrap={scrapItem}
               showReward={showReward} setShowReward={setShowReward}
               onNext={() => { setShowReward(false); setPhase('shop'); }} />
@@ -433,11 +455,12 @@ function ShopScreen({ gs, t, lang, buyBox, setPhase }: { gs: GameState; t: Trans
   );
 }
 
-// ============ UNBOX (with tape + flaps) ============
+// ============ UNBOX (with 3D box + tape + flaps) ============
 function UnboxScreen({ box, t, lang, onOpen }: { box: BoxDef; t: Translations; lang: Lang; onOpen: () => void }) {
   const [tapeTorn, setTapeTorn] = useState(false);
   const [tapeProgress, setTapeProgress] = useState(0);
   const [flaps, setFlaps] = useState([false, false, false, false]); // top, right, bottom, left
+  const [currentFlap, setCurrentFlap] = useState(0); // sequential opening
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
 
   const handleTapeSwipe = useCallback((cx: number, cy: number) => {
@@ -459,17 +482,21 @@ function UnboxScreen({ box, t, lang, onOpen }: { box: BoxDef; t: Translations; l
     lastPosRef.current = { x: cx, y: cy };
   }, [tapeTorn, tapeProgress]);
 
-  const handleFlapSwipe = useCallback((flapIndex: number, direction: 'up' | 'right' | 'down' | 'left') => {
+  const handleFlapClick = useCallback((flapIndex: number) => {
     if (!tapeTorn || flaps[flapIndex]) return;
+    // Must open sequentially
+    if (flapIndex !== currentFlap) return;
+
     playTapSound();
     const newFlaps = [...flaps];
     newFlaps[flapIndex] = true;
     setFlaps(newFlaps);
+    setCurrentFlap(currentFlap + 1);
 
     if (newFlaps.every(f => f)) {
-      setTimeout(() => onOpen(), 500);
+      setTimeout(() => onOpen(), 800);
     }
-  }, [tapeTorn, flaps, onOpen]);
+  }, [tapeTorn, flaps, currentFlap, onOpen]);
 
   const allFlapsOpen = flaps.every(f => f);
 
@@ -506,74 +533,197 @@ function UnboxScreen({ box, t, lang, onOpen }: { box: BoxDef; t: Translations; l
       ) : (
         <>
           <p className="text-amber-700 text-sm">{t.openAllFlaps}</p>
-          <div className="relative w-56 h-56" style={{ perspective: '600px' }}>
-            {/* Box base */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-8xl">{box.emoji}</span>
-            </div>
+          <p className="text-xs text-amber-600">
+            {lang === 'ru' ? `Клапан ${currentFlap + 1}/4` : `Flap ${currentFlap + 1}/4`}
+          </p>
 
-            {/* Flaps with proper transform-origin */}
-            {/* Top flap - hinges at top edge */}
-            <div
-              className="absolute top-0 left-1/2 w-24 h-14 cursor-pointer"
-              style={{
-                transformOrigin: 'center top',
-                transform: flaps[0] ? 'rotateX(-130deg)' : 'rotateX(0deg)',
-                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                marginLeft: '-48px',
-              }}
-              onClick={() => handleFlapSwipe(0, 'up')}
-            >
-              <div className="w-full h-full bg-amber-700 rounded-t-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
-                {flaps[0] ? '✓' : '↑'}
+          {/* 3D Box */}
+          <div className="relative" style={{ width: 220, height: 220, perspective: '800px' }}>
+            <div className="relative w-full h-full" style={{ transformStyle: 'preserve-3d' }}>
+              {/* Box bottom (floor) */}
+              <div
+                className="absolute"
+                style={{
+                  width: 160,
+                  height: 160,
+                  left: 30,
+                  top: 30,
+                  background: 'linear-gradient(135deg, #8B5A2B 0%, #654321 100%)',
+                  border: '3px solid #3d2817',
+                  boxShadow: 'inset 0 0 20px rgba(0,0,0,0.3)',
+                }}
+              >
+                {/* Item inside */}
+                <div className="w-full h-full flex items-center justify-center">
+                  <span className="text-6xl">{box.emoji}</span>
+                </div>
               </div>
-            </div>
 
-            {/* Right flap - hinges at right edge */}
-            <div
-              className="absolute top-1/2 right-0 w-14 h-24 cursor-pointer"
-              style={{
-                transformOrigin: 'right center',
-                transform: flaps[1] ? 'rotateY(130deg)' : 'rotateY(0deg)',
-                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                marginTop: '-48px',
-              }}
-              onClick={() => handleFlapSwipe(1, 'right')}
-            >
-              <div className="w-full h-full bg-amber-700 rounded-r-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
-                {flaps[1] ? '✓' : '→'}
+              {/* Box walls (4 sides visible from top) */}
+              {/* Top wall */}
+              <div
+                className="absolute"
+                style={{
+                  width: 160,
+                  height: 30,
+                  left: 30,
+                  top: 0,
+                  background: 'linear-gradient(180deg, #A0724A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transform: 'rotateX(-20deg)',
+                  transformOrigin: 'bottom center',
+                }}
+              />
+              {/* Bottom wall */}
+              <div
+                className="absolute"
+                style={{
+                  width: 160,
+                  height: 30,
+                  left: 30,
+                  bottom: 0,
+                  background: 'linear-gradient(0deg, #A0724A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transform: 'rotateX(20deg)',
+                  transformOrigin: 'top center',
+                }}
+              />
+              {/* Left wall */}
+              <div
+                className="absolute"
+                style={{
+                  width: 30,
+                  height: 160,
+                  left: 0,
+                  top: 30,
+                  background: 'linear-gradient(90deg, #7A4E2A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transform: 'rotateY(20deg)',
+                  transformOrigin: 'right center',
+                }}
+              />
+              {/* Right wall */}
+              <div
+                className="absolute"
+                style={{
+                  width: 30,
+                  height: 160,
+                  right: 0,
+                  top: 30,
+                  background: 'linear-gradient(270deg, #7A4E2A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transform: 'rotateY(-20deg)',
+                  transformOrigin: 'left center',
+                }}
+              />
+
+              {/* FLAPS - these open */}
+              {/* Top flap */}
+              <div
+                className="absolute cursor-pointer"
+                style={{
+                  width: 160,
+                  height: 50,
+                  left: 30,
+                  top: 30,
+                  background: flaps[0] ? 'linear-gradient(0deg, #654321 0%, #8B5A2B 100%)' : 'linear-gradient(180deg, #A0724A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transformOrigin: 'center top',
+                  transform: flaps[0] ? 'rotateX(-110deg)' : 'rotateX(0deg)',
+                  transition: 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  zIndex: flaps[0] ? 0 : 10,
+                  boxShadow: flaps[0] ? 'none' : '0 4px 8px rgba(0,0,0,0.3)',
+                }}
+                onClick={() => handleFlapClick(0)}
+              >
+                <div className="w-full h-full flex items-center justify-center">
+                  {!flaps[0] && currentFlap === 0 && (
+                    <motion.span animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1 }}
+                      className="text-white font-bold text-2xl">↑</motion.span>
+                  )}
+                  {flaps[0] && <span className="text-green-400 text-xl">✓</span>}
+                </div>
               </div>
-            </div>
 
-            {/* Bottom flap - hinges at bottom edge */}
-            <div
-              className="absolute bottom-0 left-1/2 w-24 h-14 cursor-pointer"
-              style={{
-                transformOrigin: 'center bottom',
-                transform: flaps[2] ? 'rotateX(130deg)' : 'rotateX(0deg)',
-                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                marginLeft: '-48px',
-              }}
-              onClick={() => handleFlapSwipe(2, 'down')}
-            >
-              <div className="w-full h-full bg-amber-700 rounded-b-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
-                {flaps[2] ? '✓' : '↓'}
+              {/* Right flap */}
+              <div
+                className="absolute cursor-pointer"
+                style={{
+                  width: 50,
+                  height: 160,
+                  right: 30,
+                  top: 30,
+                  background: flaps[1] ? 'linear-gradient(270deg, #654321 0%, #8B5A2B 100%)' : 'linear-gradient(90deg, #A0724A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transformOrigin: 'right center',
+                  transform: flaps[1] ? 'rotateY(110deg)' : 'rotateY(0deg)',
+                  transition: 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  zIndex: flaps[1] ? 0 : 10,
+                  boxShadow: flaps[1] ? 'none' : '-4px 0 8px rgba(0,0,0,0.3)',
+                }}
+                onClick={() => handleFlapClick(1)}
+              >
+                <div className="w-full h-full flex items-center justify-center">
+                  {!flaps[1] && currentFlap === 1 && (
+                    <motion.span animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1 }}
+                      className="text-white font-bold text-2xl">→</motion.span>
+                  )}
+                  {flaps[1] && <span className="text-green-400 text-xl">✓</span>}
+                </div>
               </div>
-            </div>
 
-            {/* Left flap - hinges at left edge */}
-            <div
-              className="absolute top-1/2 left-0 w-14 h-24 cursor-pointer"
-              style={{
-                transformOrigin: 'left center',
-                transform: flaps[3] ? 'rotateY(-130deg)' : 'rotateY(0deg)',
-                transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                marginTop: '-48px',
-              }}
-              onClick={() => handleFlapSwipe(3, 'left')}
-            >
-              <div className="w-full h-full bg-amber-700 rounded-l-lg border-2 border-amber-900 flex items-center justify-center text-white font-bold text-lg shadow-md">
-                {flaps[3] ? '✓' : '←'}
+              {/* Bottom flap */}
+              <div
+                className="absolute cursor-pointer"
+                style={{
+                  width: 160,
+                  height: 50,
+                  left: 30,
+                  bottom: 30,
+                  background: flaps[2] ? 'linear-gradient(180deg, #654321 0%, #8B5A2B 100%)' : 'linear-gradient(0deg, #A0724A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transformOrigin: 'center bottom',
+                  transform: flaps[2] ? 'rotateX(110deg)' : 'rotateX(0deg)',
+                  transition: 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  zIndex: flaps[2] ? 0 : 10,
+                  boxShadow: flaps[2] ? 'none' : '0 -4px 8px rgba(0,0,0,0.3)',
+                }}
+                onClick={() => handleFlapClick(2)}
+              >
+                <div className="w-full h-full flex items-center justify-center">
+                  {!flaps[2] && currentFlap === 2 && (
+                    <motion.span animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1 }}
+                      className="text-white font-bold text-2xl">↓</motion.span>
+                  )}
+                  {flaps[2] && <span className="text-green-400 text-xl">✓</span>}
+                </div>
+              </div>
+
+              {/* Left flap */}
+              <div
+                className="absolute cursor-pointer"
+                style={{
+                  width: 50,
+                  height: 160,
+                  left: 30,
+                  top: 30,
+                  background: flaps[3] ? 'linear-gradient(90deg, #654321 0%, #8B5A2B 100%)' : 'linear-gradient(270deg, #A0724A 0%, #8B5A2B 100%)',
+                  border: '2px solid #3d2817',
+                  transformOrigin: 'left center',
+                  transform: flaps[3] ? 'rotateY(-110deg)' : 'rotateY(0deg)',
+                  transition: 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  zIndex: flaps[3] ? 0 : 10,
+                  boxShadow: flaps[3] ? 'none' : '4px 0 8px rgba(0,0,0,0.3)',
+                }}
+                onClick={() => handleFlapClick(3)}
+              >
+                <div className="w-full h-full flex items-center justify-center">
+                  {!flaps[3] && currentFlap === 3 && (
+                    <motion.span animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1 }}
+                      className="text-white font-bold text-2xl">←</motion.span>
+                  )}
+                  {flaps[3] && <span className="text-green-400 text-xl">✓</span>}
+                </div>
               </div>
             </div>
           </div>
@@ -677,8 +827,8 @@ function CleanScreen({ item, t, lang, onComplete }: { item: Item; t: Translation
 }
 
 // ============ SELL (with bargaining) ============
-function SellScreen({ item, npc, mood, gs, t, lang, onSell, onDouble, onScrap, showReward, setShowReward, onNext }: {
-  item: Item; npc: NPCDef; mood: 'low' | 'mid' | 'high'; gs: GameState; t: Translations; lang: Lang;
+function SellScreen({ item, npc, mood, gs, t, lang, lastSalePrice, onSell, onDouble, onScrap, showReward, setShowReward, onNext }: {
+  item: Item; npc: NPCDef; mood: 'low' | 'mid' | 'high'; gs: GameState; t: Translations; lang: Lang; lastSalePrice: number;
   onSell: (level: 'low' | 'mid' | 'high') => void; onDouble: () => void; onScrap: () => void;
   showReward: boolean; setShowReward: (v: boolean) => void; onNext: () => void;
 }) {
@@ -688,12 +838,11 @@ function SellScreen({ item, npc, mood, gs, t, lang, onSell, onDouble, onScrap, s
   const highPrice = Math.floor(basePrice * 1.6);
 
   if (showReward) {
-    const finalPrice = Math.floor(basePrice * npc.priceMultiplier);
     return (
       <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
         className="flex flex-col items-center justify-center gap-6 p-6 w-full h-full">
         <motion.div animate={{ rotate: [0, 10, -10, 0] }} transition={{ repeat: Infinity, duration: 1 }} className="text-7xl">🪙</motion.div>
-        <h2 className="text-3xl font-black text-amber-900">+{finalPrice}</h2>
+        <h2 className="text-3xl font-black text-amber-900">+{lastSalePrice}</h2>
         <p className="text-amber-700">{t.sold}</p>
         {npc.repChange !== 0 && (
           <p className={`text-sm font-bold ${npc.repChange > 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -958,42 +1107,75 @@ function MinigameScreen({ t, lang, onComplete }: { t: Translations; lang: Lang; 
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="flex flex-col items-center gap-4 p-4 w-full h-full">
+      className="flex flex-col items-center gap-4 p-4 w-full h-full select-none"
+      style={{ touchAction: 'none', userSelect: 'none' }}>
       <div className="flex justify-between w-full max-w-sm">
         <div className="bg-amber-100 rounded-full px-4 py-2 font-bold text-amber-800">⏱️ {timeLeft}s</div>
         <div className="bg-green-100 rounded-full px-4 py-2 font-bold text-green-800">🪙 {score}</div>
       </div>
 
       {/* Conveyor */}
-      <div className="relative w-full max-w-sm h-64 bg-gray-200 rounded-2xl overflow-hidden border-4 border-gray-400">
+      <div
+        className="relative w-full max-w-sm h-64 bg-gray-200 rounded-2xl overflow-hidden border-4 border-gray-400 select-none"
+        style={{ touchAction: 'none', userSelect: 'none' }}
+        onTouchStart={e => e.preventDefault()}
+        onTouchMove={e => e.preventDefault()}
+        onContextMenu={e => e.preventDefault()}
+      >
         {/* Conveyor belt lines */}
-        <div className="absolute inset-0 flex flex-col justify-around opacity-30">
+        <div className="absolute inset-0 flex flex-col justify-around opacity-30 pointer-events-none">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="h-1 bg-gray-500" />
           ))}
         </div>
 
-        {/* Items with enlarged hitbox */}
+        {/* Items with enlarged hitbox (120%) and fixed positions */}
         {items.filter(item => !item.tapped).map(item => (
-          <motion.button
+          <div
             key={item.id}
-            className="absolute flex items-center justify-center"
+            className="absolute select-none"
             style={{
               left: `${item.x}%`,
               top: '50%',
+              width: '72px',   // 120% of 60px emoji area
+              height: '72px',  // 120% of 60px emoji area
               transform: 'translate(-50%, -50%)',
-              width: '80px',  // Much larger than emoji
-              height: '80px', // Much larger than emoji
+              touchAction: 'none',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              WebkitTapHighlightColor: 'transparent',
             }}
-            onClick={() => tapItem(item.id, item.isTrash)}
-            whileTap={{ scale: 0.9 }}
+            onTouchStart={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              tapItem(item.id, item.isTrash);
+            }}
+            onMouseDown={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              tapItem(item.id, item.isTrash);
+            }}
           >
-            <span className="text-4xl pointer-events-none">{item.emoji}</span>
-          </motion.button>
+            {/* Invisible enlarged hitbox */}
+            <div className="absolute inset-0 rounded-full" style={{ backgroundColor: 'rgba(0,0,0,0.01)' }} />
+            {/* Emoji - fixed position, no pointer events */}
+            <span
+              className="absolute text-5xl pointer-events-none"
+              style={{
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+              }}
+            >
+              {item.emoji}
+            </span>
+          </div>
         ))}
       </div>
 
-      <p className="text-amber-700 text-sm text-center">{t.minigameDesc}</p>
+      <p className="text-amber-700 text-sm text-center select-none">{t.minigameDesc}</p>
     </motion.div>
   );
 }

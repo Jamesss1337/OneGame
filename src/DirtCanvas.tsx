@@ -18,6 +18,10 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
   const totalPixelsRef = useRef(size * size);
   const [flies, setFlies] = useState<Array<{ id: number; x: number; y: number; angle: number }>>([]);
   const [showFlies, setShowFlies] = useState(true);
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Brush size - increased to 70px
+  const BRUSH_SIZE = 70;
 
   // Initialize flies OUTSIDE the item area
   useEffect(() => {
@@ -40,7 +44,6 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
       if (!running) return;
       frame++;
       setFlies(prev => prev.map(fly => {
-        // Move in circular pattern around edges
         fly.angle += 0.02 + Math.random() * 0.01;
         const radius = size * 0.58 + Math.sin(frame * 0.05 + fly.id) * 25;
         const centerX = size / 2;
@@ -75,7 +78,7 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
     ctx.textBaseline = 'middle';
     ctx.fillText(emoji, size / 2, size / 2);
 
-    // Draw dirt on mask canvas (fully opaque brown)
+    // Draw dirt on mask canvas
     maskCtx.fillStyle = '#654321';
     maskCtx.fillRect(0, 0, size, size);
 
@@ -100,20 +103,19 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
     totalPixelsRef.current = size * size;
   }, [emoji, size]);
 
-  // Calculate clean percentage from mask canvas
+  // Calculate clean percentage
   const calculateCleanPercent = useCallback(() => {
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
     const maskCtx = maskCanvas.getContext('2d');
     if (!maskCtx) return;
 
-    // Sample pixels (every 4th pixel for performance)
     const imageData = maskCtx.getImageData(0, 0, size, size);
     let transparentCount = 0;
-    const step = 4; // Sample every 4th pixel
+    const step = 4;
 
     for (let i = 3; i < imageData.data.length; i += 4 * step) {
-      if (imageData.data[i] < 128) { // If alpha < 128, it's transparent
+      if (imageData.data[i] < 128) {
         transparentCount++;
       }
     }
@@ -123,19 +125,17 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
     cleanPercentRef.current = Math.min(100, percent);
     onClean(cleanPercentRef.current);
 
-    // Hide flies when nearly clean
     if (cleanPercentRef.current >= 90) {
       setShowFlies(false);
     }
 
-    // Auto-complete at 95%
     if (cleanPercentRef.current >= 95 && !completedRef.current) {
       completedRef.current = true;
       onComplete();
     }
   }, [size, onClean, onComplete]);
 
-  // Erase dirt at position
+  // Erase dirt at position with increased brush size
   const eraseAt = useCallback((x: number, y: number) => {
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
@@ -144,12 +144,11 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
 
     maskCtx.globalCompositeOperation = 'destination-out';
     maskCtx.beginPath();
-    maskCtx.arc(x, y, 18, 0, Math.PI * 2);
+    maskCtx.arc(x, y, BRUSH_SIZE / 2, 0, Math.PI * 2);
     maskCtx.fill();
     maskCtx.globalCompositeOperation = 'source-over';
   }, []);
 
-  // Pointer handlers
   const getPos = (e: React.PointerEvent) => {
     const canvas = maskCanvasRef.current;
     if (!canvas) return null;
@@ -168,22 +167,26 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
     const pos = getPos(e);
     if (pos) {
       lastPosRef.current = pos;
+      setCursorPos(pos);
       eraseAt(pos.x, pos.y);
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     e.preventDefault();
-    if (!isDrawingRef.current) return;
     const pos = getPos(e);
+    if (pos) {
+      setCursorPos(pos);
+    }
+
+    if (!isDrawingRef.current) return;
     if (!pos) return;
 
-    // Draw line from last position for smooth erasing
     if (lastPosRef.current) {
       const dx = pos.x - lastPosRef.current.x;
       const dy = pos.y - lastPosRef.current.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const steps = Math.max(1, Math.floor(dist / 8));
+      const steps = Math.max(1, Math.floor(dist / 10));
 
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
@@ -201,12 +204,13 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
     e.preventDefault();
     isDrawingRef.current = false;
     lastPosRef.current = null;
+    setCursorPos(null);
     calculateCleanPercent();
   };
 
   return (
     <div className="relative" style={{ width: size, height: size }}>
-      {/* Flies around the edges (outside the item) */}
+      {/* Flies around the edges */}
       {showFlies && flies.map(fly => (
         <div
           key={fly.id}
@@ -218,9 +222,7 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
           }}
         >
           <div className="relative">
-            {/* Fly body */}
             <div className="w-2 h-3 bg-gray-800 rounded-full" />
-            {/* Wings */}
             <div
               className="absolute -top-1 -left-2 w-3 h-2 bg-gray-300/60 rounded-full"
               style={{ animation: 'flyWing 0.1s infinite alternate' }}
@@ -242,7 +244,7 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
         style={{ imageRendering: 'auto' }}
       />
 
-      {/* Dirt mask canvas (on top) */}
+      {/* Dirt mask canvas */}
       <canvas
         ref={maskCanvasRef}
         width={size}
@@ -255,6 +257,20 @@ export default function DirtCanvas({ emoji, size, onClean, onComplete }: DirtCan
         onPointerLeave={handlePointerUp}
         onPointerCancel={handlePointerUp}
       />
+
+      {/* Brush cursor indicator */}
+      {cursorPos && (
+        <div
+          className="absolute pointer-events-none z-20 border-2 border-white/50 rounded-full"
+          style={{
+            left: cursorPos.x - BRUSH_SIZE / 2,
+            top: cursorPos.y - BRUSH_SIZE / 2,
+            width: BRUSH_SIZE,
+            height: BRUSH_SIZE,
+            backgroundColor: 'rgba(255, 255, 255, 0.1)',
+          }}
+        />
+      )}
 
       <style>{`
         @keyframes flyWing {
